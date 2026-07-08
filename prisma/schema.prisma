@@ -1,0 +1,99 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Asset {
+  id            String   @id @default(cuid())
+  ticker        String   @unique
+  name          String
+  type          String
+  market        String
+  sector        String
+  segment       String
+  currency      String   @default("BRL")
+  price         Float
+  source        String   @default("local")
+  payload       Json
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model UserPortfolio {
+  id            String   @id @default(cuid())
+  userId        String
+  ticker        String
+  quantity      Float
+  averagePrice  Float
+  broker        String?
+  purchaseDate  DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model FavoriteAsset {
+  id        String   @id @default(cuid())
+  userId    String
+  ticker    String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, ticker])
+}
+
+model AlertRule {
+  id          String   @id @default(cuid())
+  userId      String
+  ticker      String
+  type        String
+  targetValue Float
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model AppUser {
+  id           String   @id @default(cuid())
+  role         String
+  username     String   @unique
+  email        String   @unique
+  name         String
+  phone        String?
+  passwordHash String
+  planId       String?
+  status       String   @default("ativo")
+  dueDate      DateTime?
+  notes        String?
+  permissions  Json
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  payments     Payment[]
+}
+
+model AccessPlan {
+  id           String   @id
+  name         String
+  value        Float
+  durationDays Int
+  status       String   @default("ativo")
+  permissions  Json
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Payment {
+  id          String   @id @default(cuid())
+  clientId    String
+  client      AppUser  @relation(fields: [clientId], references: [id])
+  planId      String
+  value       Float
+  paymentDate DateTime
+  dueDate     DateTime
+  status      String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
