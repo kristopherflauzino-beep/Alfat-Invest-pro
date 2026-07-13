@@ -121,6 +121,7 @@ type Account = {
   phone?: string;
   passwordHash: string;
   planId?: string;
+  planValue?: number;
   status: ClientStatus;
   createdAt: string;
   dueDate?: string;
@@ -136,6 +137,13 @@ type Payment = {
   paymentDate: string;
   dueDate: string;
   status: PaymentStatus;
+};
+
+type AppStatePayload = {
+  accounts: Account[];
+  plans: Plan[];
+  payments: Payment[];
+  portfolio: PortfolioPosition[];
 };
 
 const ADMIN_DEFAULT_HASH = "cc5c75de95387000d28fce6a21f4d8c4ff8560b1b37e73d39eb63c3029697db5";
@@ -250,6 +258,76 @@ function todayIso() {
 }
 function isExpired(dueDate?: string) {
   return Boolean(dueDate && dueDate < todayIso());
+}
+
+function baseAdminAccount(): Account {
+  return {
+    id: "admin-flauzino",
+    role: "ADMIN",
+    username: "Flauzino",
+    email: "admin@alfatec.local",
+    name: "Flauzino",
+    passwordHash: ADMIN_DEFAULT_HASH,
+    status: "ativo",
+    createdAt: todayIso(),
+    permissions: allClientModules
+  };
+}
+
+function safeParse<T>(value: string | null, fallback: T): T {
+  if (!value) return fallback;
+  try { return JSON.parse(value) as T; } catch { return fallback; }
+}
+
+function normalizeAccounts(accounts: Account[]) {
+  const admin = baseAdminAccount();
+  const normalized = accounts.length ? accounts : [admin];
+  const withAdmin = normalized.some((account) => account.id === admin.id) ? normalized : [admin, ...normalized];
+  return withAdmin.map((account) => {
+    if (account.role === "ADMIN") return { ...account, permissions: allClientModules };
+    const permissions = account.permissions?.length >= 7 ? allClientModules : account.permissions ?? [];
+    const status = account.role === "CLIENTE" && isExpired(account.dueDate) && account.status === "ativo" ? "vencido" : account.status;
+    return { ...account, permissions, status, planValue: account.planValue };
+  });
+}
+
+function normalizePlans(plans: Plan[]) {
+  const source = plans.length ? plans : defaultPlans;
+  return source.map((plan) => ({ ...plan, permissions: plan.permissions.length >= 7 ? allClientModules : plan.permissions }));
+}
+
+function mergeById<T extends { id: string }>(server: T[], local: T[]) {
+  const map = new Map<string, T>();
+  server.forEach((item) => map.set(item.id, item));
+  local.forEach((item) => { if (!map.has(item.id)) map.set(item.id, item); });
+  return Array.from(map.values());
+}
+
+function mergeAccounts(server: Account[], local: Account[]) {
+  const map = new Map<string, Account>();
+  server.forEach((account) => map.set(account.id, account));
+  local.forEach((account) => {
+    const existsById = map.has(account.id);
+    const existsByEmail = Array.from(map.values()).some((item) => item.email.toLowerCase() === account.email.toLowerCase());
+    if (!existsById && !existsByEmail) map.set(account.id, account);
+  });
+  return normalizeAccounts(Array.from(map.values()));
+}
+
+function mergeAppState(server: Partial<AppStatePayload>, local: AppStatePayload): AppStatePayload {
+  return {
+    accounts: mergeAccounts(normalizeAccounts(server.accounts ?? []), local.accounts),
+    plans: normalizePlans(mergeById(normalizePlans(server.plans ?? []), local.plans)),
+    payments: mergeById(server.payments ?? [], local.payments),
+    portfolio: (server.portfolio?.length ? server.portfolio : local.portfolio).length ? (server.portfolio?.length ? server.portfolio : local.portfolio) : starterPortfolio
+  };
+}
+
+function statesDiffer(a: AppStatePayload, b: Partial<AppStatePayload>) {
+  return JSON.stringify(a.accounts) !== JSON.stringify(b.accounts ?? []) ||
+    JSON.stringify(a.plans) !== JSON.stringify(b.plans ?? []) ||
+    JSON.stringify(a.payments) !== JSON.stringify(b.payments ?? []) ||
+    JSON.stringify(a.portfolio) !== JSON.stringify(b.portfolio ?? []);
 }
 function rangeHistory(asset: Asset, range: RangeId) {
   const config = ranges.find((item) => item.id === range) ?? ranges[4];
@@ -368,6 +446,7 @@ export default function AlfatecInvestPro() {
   const [marketQuoteStatus, setMarketQuoteStatus] = useState<"idle" | "loading" | "error">("idle");
   const [marketQuoteMessage, setMarketQuoteMessage] = useState("");
   const [refreshingMarket, setRefreshingMarket] = useState(false);
+  const [stateLoaded, setStateLoaded] = useState(false);
 
   const assets = useMemo(() => buildAssetMap(extraAssets), [extraAssets]);
   const portfolioAnalysis = useMemo(() => analyzePortfolio(portfolio, assets), [portfolio, assets]);
@@ -390,46 +469,68 @@ export default function AlfatecInvestPro() {
       .map((item) => ({ ...item, group: "Administração" }))
   ], []);
 
+  async function persistAppState(snapshot: AppStatePayload) {
+    const response = await fetch("/api/app-state", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(snapshot)
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data?.error ?? "Não foi possível salvar os dados no banco.");
+    }
+  }
+
   useEffect(() => {
-    const savedAccounts = window.localStorage.getItem("alfatec-users");
-    const savedPlans = window.localStorage.getItem("alfatec-plans");
-    const savedPayments = window.localStorage.getItem("alfatec-payments");
     const savedSession = window.localStorage.getItem("alfatec-session");
     const savedTheme = window.localStorage.getItem("alfatec-theme");
-    const savedPortfolio = window.localStorage.getItem("alfatec-portfolio");
-    const baseAdmin: Account = {
-      id: "admin-flauzino",
-      role: "ADMIN",
-      username: "Flauzino",
-      email: "admin@alfatec.local",
-      name: "Flauzino",
-      passwordHash: ADMIN_DEFAULT_HASH,
-      status: "ativo",
-      createdAt: todayIso(),
-      permissions: allClientModules
-    };
-    let loadedAccounts: Account[] = savedAccounts ? JSON.parse(savedAccounts) : [baseAdmin];
-    if (!loadedAccounts.some((account) => account.id === baseAdmin.id)) loadedAccounts = [baseAdmin, ...loadedAccounts];
-    loadedAccounts = loadedAccounts.map((account) => {
-      if (account.role === "ADMIN") return { ...account, permissions: allClientModules };
-      const shouldHaveAll = account.permissions.length >= 7;
-      const permissions = shouldHaveAll ? allClientModules : account.permissions;
-      return account.role === "CLIENTE" && isExpired(account.dueDate) && account.status === "ativo" ? { ...account, permissions, status: "vencido" } : { ...account, permissions };
-    });
-    setAccounts(loadedAccounts);
-    const loadedPlans: Plan[] = savedPlans ? JSON.parse(savedPlans) : defaultPlans;
-    setPlans(loadedPlans.map((plan) => plan.permissions.length >= 7 ? { ...plan, permissions: allClientModules } : plan));
-    if (savedPayments) setPayments(JSON.parse(savedPayments));
     if (savedSession) setSessionId(savedSession);
     if (savedTheme) setDarkMode(savedTheme === "dark");
-    if (savedPortfolio) setPortfolio(JSON.parse(savedPortfolio));
+
+    const localState: AppStatePayload = {
+      accounts: normalizeAccounts(safeParse<Account[]>(window.localStorage.getItem("alfatec-users"), [])),
+      plans: normalizePlans(safeParse<Plan[]>(window.localStorage.getItem("alfatec-plans"), defaultPlans)),
+      payments: safeParse<Payment[]>(window.localStorage.getItem("alfatec-payments"), []),
+      portfolio: safeParse<PortfolioPosition[]>(window.localStorage.getItem("alfatec-portfolio"), starterPortfolio)
+    };
+
+    let cancelled = false;
+    async function loadState() {
+      try {
+        const response = await fetch("/api/app-state", { cache: "no-store" });
+        if (!response.ok) throw new Error("Banco indisponível");
+        const serverState = await response.json() as Partial<AppStatePayload>;
+        const merged = mergeAppState(serverState, localState);
+        if (cancelled) return;
+        setAccounts(merged.accounts);
+        setPlans(merged.plans);
+        setPayments(merged.payments);
+        setPortfolio(merged.portfolio.length ? merged.portfolio : starterPortfolio);
+        setStateLoaded(true);
+        if (statesDiffer(merged, serverState)) void persistAppState(merged).catch(console.error);
+      } catch (error) {
+        console.error("Usando dados locais porque o banco não respondeu", error);
+        if (cancelled) return;
+        setAccounts(localState.accounts);
+        setPlans(localState.plans);
+        setPayments(localState.payments);
+        setPortfolio(localState.portfolio.length ? localState.portfolio : starterPortfolio);
+        setStateLoaded(true);
+      }
+    }
+
+    void loadState();
+    return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => { if (accounts.length) window.localStorage.setItem("alfatec-users", JSON.stringify(accounts)); }, [accounts]);
-  useEffect(() => window.localStorage.setItem("alfatec-plans", JSON.stringify(plans)), [plans]);
-  useEffect(() => window.localStorage.setItem("alfatec-payments", JSON.stringify(payments)), [payments]);
+  useEffect(() => {
+    if (!stateLoaded) return;
+    const snapshot: AppStatePayload = { accounts, plans, payments, portfolio };
+    const timeout = window.setTimeout(() => { void persistAppState(snapshot).catch(console.error); }, 500);
+    return () => window.clearTimeout(timeout);
+  }, [stateLoaded, accounts, plans, payments, portfolio]);
+
   useEffect(() => window.localStorage.setItem("alfatec-theme", darkMode ? "dark" : "light"), [darkMode]);
-  useEffect(() => window.localStorage.setItem("alfatec-portfolio", JSON.stringify(portfolio)), [portfolio]);
   useEffect(() => { extraAssets.filter((asset) => asset.source === "external").forEach((asset) => window.localStorage.setItem("alfatec-quote-" + asset.ticker, JSON.stringify(asset))); }, [extraAssets]);
   useEffect(() => { if (sessionId) window.localStorage.setItem("alfatec-session", sessionId); else window.localStorage.removeItem("alfatec-session"); }, [sessionId]);
   async function refreshTicker(tickerInput: string, options: { select?: boolean; silent?: boolean } = {}) {
@@ -555,6 +656,7 @@ export default function AlfatecInvestPro() {
       phone: String(formData.get("phone") ?? "").trim(),
       passwordHash: await sha256(password),
       planId,
+      planValue: plan.value,
       status: "ativo",
       createdAt: todayIso(),
       dueDate: String(formData.get("dueDate") ?? "") || addDays(plan.durationDays),
@@ -574,7 +676,7 @@ export default function AlfatecInvestPro() {
   function changeClientPlan(client: Account, planId: string) {
     const plan = plans.find((item) => item.id === planId);
     if (!plan) return;
-    updateClient(client.id, { planId, dueDate: addDays(plan.durationDays), status: "ativo", permissions: plan.permissions });
+    updateClient(client.id, { planId, planValue: plan.value, dueDate: addDays(plan.durationDays), status: "ativo", permissions: plan.permissions });
   }
 
   function addPayment(event: React.FormEvent<HTMLFormElement>) {
@@ -590,13 +692,13 @@ export default function AlfatecInvestPro() {
       id: crypto.randomUUID(),
       clientId,
       planId,
-      value: Number(formData.get("value") ?? plan.value),
+      value: Number(formData.get("value") || client.planValue || plan.value),
       paymentDate: String(formData.get("paymentDate") ?? "") || todayIso(),
       dueDate,
       status: String(formData.get("status") ?? "pago") as PaymentStatus
     };
     setPayments((current) => [payment, ...current]);
-    if (payment.status === "pago") updateClient(clientId, { status: "ativo", planId, dueDate, permissions: plan.permissions });
+    if (payment.status === "pago") updateClient(clientId, { status: "ativo", planId, planValue: client.planValue ?? plan.value, dueDate, permissions: plan.permissions });
     event.currentTarget.reset();
   }
 
@@ -744,14 +846,16 @@ export default function AlfatecInvestPro() {
                           </div>
                           <StatusPill status={client.status} />
                         </div>
-                        <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                          <select value={client.planId ?? ""} onChange={(e) => changeClientPlan(client, e.target.value)} className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-white/10 dark:bg-slate-950">
+                        <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+                          <select aria-label="Plano do cliente" value={client.planId ?? ""} onChange={(e) => changeClientPlan(client, e.target.value)} className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-white/10 dark:bg-slate-950">
                             {plans.map((planItem) => <option key={planItem.id} value={planItem.id}>{planItem.name}</option>)}
                           </select>
+                          <input aria-label="Valor do plano do cliente" type="number" min="0" step="0.01" value={client.planValue ?? plan?.value ?? 0} onChange={(e) => updateClient(client.id, { planValue: Number(e.target.value) })} className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-white/10 dark:bg-slate-950" />
                           <input type="date" value={client.dueDate ?? ""} onChange={(e) => updateClient(client.id, { dueDate: e.target.value, status: e.target.value < todayIso() ? "vencido" : "ativo" })} className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-white/10 dark:bg-slate-950" />
                           <button onClick={() => updateClient(client.id, { status: client.status === "bloqueado" ? "ativo" : "bloqueado" })} className={cls("rounded-2xl px-3 py-2 text-sm font-bold", client.status === "bloqueado" ? "bg-emerald-500 text-white" : "bg-red-500 text-white")}>{client.status === "bloqueado" ? <Unlock className="mr-1 inline h-4 w-4" /> : <Lock className="mr-1 inline h-4 w-4" />}{client.status === "bloqueado" ? "Desbloquear" : "Bloquear"}</button>
                           <button onClick={() => setAccounts((current) => current.filter((account) => account.id !== client.id))} className="rounded-2xl bg-slate-100 px-3 py-2 text-sm font-bold text-red-500 dark:bg-white/10"><Trash2 className="mr-1 inline h-4 w-4" />Excluir</button>
                         </div>
+                        <p className="mt-2 text-xs font-semibold text-slate-500 dark:text-slate-300">Valor individual do plano: {money.format(client.planValue ?? plan?.value ?? 0)}</p>
                         <button onClick={() => setSelectedClientId(selectedClientId === client.id ? null : client.id)} className="mt-3 text-sm font-bold text-teal-500">{selectedClientId === client.id ? "Ocultar permissões" : "Editar permissões"}</button>
                         {selectedClientId === client.id && <PermissionsEditor client={client} updateClient={updateClient} />}
                       </div>
@@ -1298,7 +1402,7 @@ function buildFinancialSummary(clients: Account[], plans: Plan[], payments: Paym
   const expired = clients.filter((client) => client.status === "vencido" || isExpired(client.dueDate)).length;
   const received = payments.filter((payment) => payment.status === "pago").reduce((sum, payment) => sum + payment.value, 0);
   const pending = payments.filter((payment) => ["pendente", "vencido"].includes(payment.status)).reduce((sum, payment) => sum + payment.value, 0);
-  const expected = clients.reduce((sum, client) => sum + (plans.find((plan) => plan.id === client.planId)?.value ?? 0), 0);
+  const expected = clients.reduce((sum, client) => sum + (client.planValue ?? plans.find((plan) => plan.id === client.planId)?.value ?? 0), 0);
   return { active, blocked, expired, received, pending, expected };
 }
 function buildEquityCurve(lines: ReturnType<typeof analyzePortfolio>["lines"]) {

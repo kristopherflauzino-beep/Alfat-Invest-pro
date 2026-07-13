@@ -161,3 +161,46 @@ textarea {
   color: #cbd5e1 !important;
   fill: #cbd5e1 !important;
 }
+
+@media (max-width: 640px) {
+  .recharts-wrapper,
+  .recharts-surface {
+    overflow: visible !important;
+  }
+
+  .recharts-legend-wrapper {
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    padding-top: 10px !important;
+    transform: none !important;
+  }
+
+  .recharts-default-legend {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 8px 12px !important;
+    line-height: 1.25 !important;
+    white-space: normal !important;
+  }
+
+  .recharts-legend-item {
+    display: inline-flex !important;
+    align-items: center !important;
+    max-width: 46%;
+    margin-right: 0 !important;
+    white-space: normal !important;
+  }
+
+  .recharts-legend-item-text {
+    display: inline-block !important;
+    overflow-wrap: anywhere !important;
+    font-size: 11px !important;
+  }
+
+  .recharts-cartesian-axis-tick-value {
+    font-size: 10px !important;
+  }
+}
