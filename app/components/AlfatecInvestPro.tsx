@@ -7,7 +7,9 @@ import {
   Bell,
   BrainCircuit,
   BriefcaseBusiness,
+  Calculator,
   CalendarDays,
+  History,
   RefreshCw,
   CheckCircle2,
   ChevronRight,
@@ -72,10 +74,29 @@ import {
 } from "@/lib/market-data";
 import type { Asset, AssetType, PortfolioPosition, RadarWeights } from "@/lib/types";
 
+import {
+  analisarNumeroGraham,
+  aplicarPrecoNosCenarios,
+  calcularCenariosGraham,
+  calcularDiasRestantes,
+  calcularGrahamCrescimento,
+  calcularMargemSeguranca,
+  calcularPotencial,
+  defaultGrahamSettings,
+  deriveGrahamInputs,
+  grahamScoreContribution,
+  type GrahamSettings
+} from "@/lib/valuation/graham";
+import { GrahamComparison } from "@/components/valuation/GrahamComparison";
+import { GrahamExplanation } from "@/components/valuation/GrahamExplanation";
+import { GrahamGrowthCard } from "@/components/valuation/GrahamGrowthCard";
+import { GrahamNumberCard } from "@/components/valuation/GrahamNumberCard";
+import { GrahamOpportunityFilter } from "@/components/valuation/GrahamOpportunityFilter";
+
 type Role = "ADMIN" | "CLIENTE";
 type ClientStatus = "ativo" | "pendente" | "bloqueado" | "vencido";
 type PaymentStatus = "pago" | "pendente" | "vencido" | "cancelado";
-type ClientModuleId = "dashboard" | "mercado" | "oportunidades" | "comparador" | "carteira" | "radar" | "relatorios" | "configuracoes";
+type ClientModuleId = "dashboard" | "mercado" | "oportunidades" | "comparador" | "carteira" | "radar" | "relatorios" | "graham_valuation" | "plano" | "configuracoes";
 type AdminModuleId = "admin-dashboard" | "clientes" | "planos" | "financeiro" | "admin-relatorios" | "configuracoes";
 type RangeId = "1D" | "5D" | "1M" | "6M" | "1A" | "5A" | "MAX";
 
@@ -110,6 +131,9 @@ type Plan = {
   durationDays: number;
   status: "ativo" | "inativo";
   permissions: ClientModuleId[];
+  updatedAt?: string;
+  updatedBy?: string;
+  notes?: string;
 };
 
 type Account = {
@@ -125,6 +149,8 @@ type Account = {
   status: ClientStatus;
   createdAt: string;
   dueDate?: string;
+  planStartedAt?: string;
+  subscriptionStatus?: "active" | "expired" | "cancelled" | "blocked";
   notes?: string;
   permissions: ClientModuleId[];
 };
@@ -137,17 +163,38 @@ type Payment = {
   paymentDate: string;
   dueDate: string;
   status: PaymentStatus;
+  planName?: string;
+  notes?: string;
+  createdBy?: string;
+  renewalMode?: "today" | "extend";
 };
+
+type PlanPriceHistory = {
+  id: string;
+  planId: string;
+  planName: string;
+  previousPrice: number;
+  newPrice: number;
+  changedByUserId: string;
+  changedByName: string;
+  notes?: string;
+  createdAt: string;
+};
+
+type AuditLog = { id: string; action: string; userId: string; userName: string; details: string; createdAt: string; risk: "baixo" | "medio" | "alto" };
 
 type AppStatePayload = {
   accounts: Account[];
   plans: Plan[];
   payments: Payment[];
   portfolio: PortfolioPosition[];
+  planPriceHistory: PlanPriceHistory[];
+  grahamSettings: GrahamSettings;
+  auditLogs: AuditLog[];
 };
 
 const ADMIN_DEFAULT_HASH = "cc5c75de95387000d28fce6a21f4d8c4ff8560b1b37e73d39eb63c3029697db5";
-const allClientModules: ClientModuleId[] = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "radar", "relatorios", "configuracoes"];
+const allClientModules: ClientModuleId[] = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "radar", "relatorios", "graham_valuation", "plano", "configuracoes"];
 const clientModules: Array<{ id: ClientModuleId; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: "dashboard", label: "Dashboard", icon: Gauge },
   { id: "mercado", label: "Mercado", icon: BarChart3 },
@@ -156,6 +203,8 @@ const clientModules: Array<{ id: ClientModuleId; label: string; icon: React.Comp
   { id: "carteira", label: "Minha Carteira", icon: WalletCards },
   { id: "radar", label: "Radar IA", icon: BrainCircuit },
   { id: "relatorios", label: "Relatórios", icon: FileSpreadsheet },
+  { id: "graham_valuation", label: "Valuation Graham", icon: Calculator },
+  { id: "plano", label: "Plano", icon: WalletCards },
   { id: "configuracoes", label: "Configurações", icon: Settings }
 ];
 const adminModules: Array<{ id: AdminModuleId; label: string; icon: React.ComponentType<{ className?: string }> }> = [
@@ -197,8 +246,8 @@ const palette = ["#14b8a6", "#38bdf8", "#8b5cf6", "#f59e0b", "#22c55e", "#ef4444
 function cls(...values: Array<string | false | undefined | null>) {
   return values.filter(Boolean).join(" ");
 }
-function pct(value?: number) {
-  if (value === undefined || Number.isNaN(value)) return "-";
+function pct(value?: number | null) {
+  if (value === undefined || value === null || Number.isNaN(value)) return "-";
   return `${percent.format(value)}%`;
 }
 function metric(value?: number, suffix = "") {
@@ -289,7 +338,7 @@ function normalizeAccounts(accounts: Account[]) {
     if (account.role === "ADMIN") return { ...account, permissions: allClientModules };
     const permissions = account.permissions?.length >= 7 ? allClientModules : account.permissions ?? [];
     const status = account.role === "CLIENTE" && isExpired(account.dueDate) && account.status === "ativo" ? "vencido" : account.status;
-    return { ...account, permissions, status, planValue: account.planValue };
+    return { ...account, permissions, status, planValue: account.planValue, planStartedAt: account.planStartedAt ?? account.createdAt };
   });
 }
 
@@ -298,8 +347,12 @@ function normalizePlans(plans: Plan[]) {
   return source.map((plan) => {
     const legacyValues = legacyPlanValues[plan.id] ?? [];
     const value = legacyValues.includes(plan.value) ? suggestedPlanValues[plan.id] ?? plan.value : plan.value;
-    return { ...plan, value, permissions: plan.permissions.length >= 7 ? allClientModules : plan.permissions };
+    return { ...plan, value, permissions: plan.permissions.length >= 7 ? allClientModules : plan.permissions, updatedAt: plan.updatedAt ?? todayIso(), updatedBy: plan.updatedBy ?? "Sistema" };
   });
+}
+
+function normalizeGrahamSettings(settings?: Partial<GrahamSettings>): GrahamSettings {
+  return { ...defaultGrahamSettings, ...(settings ?? {}) };
 }
 
 function mergeById<T extends { id: string }>(server: T[], local: T[]) {
@@ -323,7 +376,7 @@ function mergeAccounts(server: Account[], local: Account[]) {
 function applyPlanValuesToAccounts(accounts: Account[], plans: Plan[]) {
   return accounts.map((account) => {
     const plan = plans.find((item) => item.id === account.planId);
-    return account.role === "CLIENTE" && plan ? { ...account, planValue: plan.value } : account;
+    return account.role === "CLIENTE" && plan ? { ...account, planValue: account.planValue ?? plan.value } : account;
   });
 }
 
@@ -334,7 +387,10 @@ function mergeAppState(server: Partial<AppStatePayload>, local: AppStatePayload)
     accounts,
     plans,
     payments: mergeById(server.payments ?? [], local.payments),
-    portfolio: (server.portfolio?.length ? server.portfolio : local.portfolio).length ? (server.portfolio?.length ? server.portfolio : local.portfolio) : starterPortfolio
+    portfolio: (server.portfolio?.length ? server.portfolio : local.portfolio).length ? (server.portfolio?.length ? server.portfolio : local.portfolio) : starterPortfolio,
+    planPriceHistory: mergeById(server.planPriceHistory ?? [], local.planPriceHistory),
+    grahamSettings: normalizeGrahamSettings(server.grahamSettings ?? local.grahamSettings),
+    auditLogs: mergeById(server.auditLogs ?? [], local.auditLogs)
   };
 }
 
@@ -342,7 +398,10 @@ function statesDiffer(a: AppStatePayload, b: Partial<AppStatePayload>) {
   return JSON.stringify(a.accounts) !== JSON.stringify(b.accounts ?? []) ||
     JSON.stringify(a.plans) !== JSON.stringify(b.plans ?? []) ||
     JSON.stringify(a.payments) !== JSON.stringify(b.payments ?? []) ||
-    JSON.stringify(a.portfolio) !== JSON.stringify(b.portfolio ?? []);
+    JSON.stringify(a.portfolio) !== JSON.stringify(b.portfolio ?? []) ||
+    JSON.stringify(a.planPriceHistory) !== JSON.stringify(b.planPriceHistory ?? []) ||
+    JSON.stringify(a.grahamSettings) !== JSON.stringify(b.grahamSettings ?? defaultGrahamSettings) ||
+    JSON.stringify(a.auditLogs) !== JSON.stringify(b.auditLogs ?? []);
 }
 
 function planValueFor(plans: Plan[], planId?: string) {
@@ -357,6 +416,69 @@ function performance(history: Asset["priceHistory"]) {
   const last = history[history.length - 1]?.price ?? 0;
   return first > 0 ? ((last / first) - 1) * 100 : 0;
 }
+
+function assetWithScore(asset: Asset, weights: RadarWeights, grahamSettings: GrahamSettings): Asset {
+  const baseScore = calculateAssetScore(asset, weights);
+  const grahamWeight = grahamSettings.enabled ? Math.min(15, Math.max(0, grahamSettings.scoreWeight)) : 0;
+  const graham = grahamScoreContribution(asset, grahamWeight);
+  return { ...asset, score: Math.min(100, Math.round(baseScore + graham)) };
+}
+
+function passesGrahamOpportunityFilters(asset: Asset, filters: { onlyBelow: boolean; minMargin: number; onlyPositiveLpa: boolean; onlyPositiveVpa: boolean }) {
+  const analysis = analisarNumeroGraham(asset);
+  const inputs = deriveGrahamInputs(asset);
+  if (filters.onlyPositiveLpa && (!inputs.lpa || inputs.lpa <= 0)) return false;
+  if (filters.onlyPositiveVpa && (!inputs.vpa || inputs.vpa <= 0)) return false;
+  if (filters.onlyBelow && (!analysis.applicable || (analysis.difference ?? 0) <= 0)) return false;
+  if (filters.minMargin > 0 && (!analysis.applicable || (analysis.safetyMargin ?? -Infinity) < filters.minMargin)) return false;
+  return true;
+}
+
+function passesRadarFilters(asset: Asset, filters: { grahamOnly: boolean; minMargin: number; minPotential: number; maxPl: number; maxPvp: number; minLiquidity: number; minRoe: number; maxDebt: number }) {
+  const graham = analisarNumeroGraham(asset);
+  const inputs = deriveGrahamInputs(asset);
+  if (!inputs.lpa || inputs.lpa <= 0 || !inputs.vpa || inputs.vpa <= 0) return false;
+  if (filters.grahamOnly && (!graham.applicable || (graham.difference ?? 0) <= 0)) return false;
+  if (filters.minMargin > 0 && (!graham.applicable || (graham.safetyMargin ?? -Infinity) < filters.minMargin)) return false;
+  if (filters.minPotential > 0 && (!graham.applicable || (graham.potential ?? -Infinity) < filters.minPotential)) return false;
+  if (filters.maxPl > 0 && (asset.metrics.pl ?? Infinity) > filters.maxPl) return false;
+  if (filters.maxPvp > 0 && (asset.metrics.pvp ?? Infinity) > filters.maxPvp) return false;
+  if (filters.minLiquidity > 0 && asset.liquidity < filters.minLiquidity) return false;
+  if (filters.minRoe > 0 && (asset.metrics.roe ?? -Infinity) < filters.minRoe) return false;
+  if (filters.maxDebt > 0 && (asset.metrics.debtToEquity ?? 0) > filters.maxDebt) return false;
+  return true;
+}
+
+function addDaysToDate(baseDate: string | undefined, days: number) {
+  const base = baseDate ? new Date(baseDate + "T00:00:00") : new Date();
+  if (Number.isNaN(base.getTime())) return addDays(days);
+  base.setDate(base.getDate() + days);
+  return base.toISOString().slice(0, 10);
+}
+
+function planVisualStatus(client: Account) {
+  if (client.status === "bloqueado") return { label: "Bloqueado", detail: "Plano bloqueado pelo administrador." };
+  if (client.status === "pendente") return { label: "Pendente", detail: "Aguardando liberação do administrador." };
+  const days = calcularDiasRestantes(client.dueDate ?? todayIso());
+  if (client.status === "vencido" || isExpired(client.dueDate)) return { label: "Vencido", detail: "Plano expirado e acesso bloqueado." };
+  if (days === 0) return { label: "Vence hoje", detail: "Último dia de acesso." };
+  if (days <= 7) return { label: "Vencimento próximo", detail: `Seu plano vence em ${days} dia${days === 1 ? "" : "s"}.` };
+  return { label: "Ativo", detail: "Plano válido e com dias restantes." };
+}
+
+function planAlertText(client: Account) {
+  if (!client.dueDate) return "Vencimento não informado.";
+  if (client.status === "bloqueado") return "Seu plano está bloqueado. Entre em contato com o administrador.";
+  if (isExpired(client.dueDate) || client.status === "vencido") return "Seu plano está vencido. Entre em contato com o administrador para renovar.";
+  const days = calcularDiasRestantes(client.dueDate);
+  if (days === 7) return "Seu plano vence em 7 dias.";
+  if (days === 3) return "Seu plano vence em 3 dias.";
+  if (days === 1) return "Seu plano vence amanhã.";
+  if (days === 0) return "Seu plano vence hoje.";
+  if (days < 7) return `Seu plano vence em ${days} dias.`;
+  return "";
+}
+
 function buildComparison(assetA: Asset, assetB: Asset, range: RangeId) {
   const a = rangeHistory(assetA, range);
   const b = rangeHistory(assetB, range);
@@ -426,7 +548,7 @@ async function sha256(value: string) {
 }
 function passwordChecks(value: string) {
   return [
-    { id: "length", label: "Mínimo 6 caracteres", valid: value.length >= 6 },
+    { id: "length", label: "Mínimo 12 caracteres", valid: value.length >= 12 },
     { id: "letters", label: "Letras", valid: /[A-Za-z]/.test(value) },
     { id: "number", label: "Número", valid: /\d/.test(value) },
     { id: "special", label: "Caractere especial", valid: /[^A-Za-z0-9]/.test(value) }
@@ -436,7 +558,7 @@ function isStrongPassword(value: string) {
   return passwordChecks(value).every((item) => item.valid);
 }
 function passwordRequirementMessage() {
-  return "A senha precisa ter mínimo de 6 caracteres, letras, número e caractere especial.";
+  return "A senha precisa ter mínimo de 12 caracteres, letras, número e caractere especial.";
 }
 function downloadText(filename: string, content: string, type = "text/plain;charset=utf-8") {
   const blob = new Blob([content], { type });
@@ -453,13 +575,16 @@ export default function AlfatecInvestPro() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [plans, setPlans] = useState<Plan[]>(defaultPlans);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [planPriceHistory, setPlanPriceHistory] = useState<PlanPriceHistory[]>([]);
+  const [grahamSettings, setGrahamSettings] = useState<GrahamSettings>(defaultGrahamSettings);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [loginUser, setLoginUser] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState("");
   const [registerMessage, setRegisterMessage] = useState("");
-  const [newClientPassword, setNewClientPassword] = useState("Invest@123");
+  const [newClientPassword, setNewClientPassword] = useState("Invest@2026!");
   const [databaseError, setDatabaseError] = useState("");
   const [clientModule, setClientModule] = useState<ClientModuleId>("dashboard");
   const [adminModule, setAdminModule] = useState<ClientModuleId | AdminModuleId>("admin-dashboard");
@@ -477,6 +602,22 @@ export default function AlfatecInvestPro() {
   const [searchA, setSearchA] = useState("GARE11");
   const [searchB, setSearchB] = useState("PETR4");
   const [weights, setWeights] = useState<RadarWeights>({ dividendYield: 22, valuation: 22, quality: 22, growth: 14, liquidity: 10, risk: 10 });
+  const [grahamSearch, setGrahamSearch] = useState("PETR4");
+  const [grahamAsset, setGrahamAsset] = useState<Asset>(() => getAsset("PETR4"));
+  const [grahamGrowth, setGrahamGrowth] = useState(8);
+  const [grahamY, setGrahamY] = useState(defaultGrahamSettings.defaultY);
+  const [opGrahamOnly, setOpGrahamOnly] = useState(false);
+  const [opMinMargin, setOpMinMargin] = useState(0);
+  const [opPositiveLpa, setOpPositiveLpa] = useState(false);
+  const [opPositiveVpa, setOpPositiveVpa] = useState(false);
+  const [radarGrahamOnly, setRadarGrahamOnly] = useState(false);
+  const [radarMinMargin, setRadarMinMargin] = useState(0);
+  const [radarMinPotential, setRadarMinPotential] = useState(0);
+  const [radarMaxPl, setRadarMaxPl] = useState(25);
+  const [radarMaxPvp, setRadarMaxPvp] = useState(3);
+  const [radarMinLiquidity, setRadarMinLiquidity] = useState(0);
+  const [radarMinRoe, setRadarMinRoe] = useState(0);
+  const [radarMaxDebt, setRadarMaxDebt] = useState(3);
   const [settings, setSettings] = useState({ currency: "BRL", language: "pt-BR", autoUpdate: true, priceAlerts: true, dividendAlerts: true });
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [marketQuoteStatus, setMarketQuoteStatus] = useState<"idle" | "loading" | "error">("idle");
@@ -488,7 +629,10 @@ export default function AlfatecInvestPro() {
   const portfolioAnalysis = useMemo(() => analyzePortfolio(portfolio, assets), [portfolio, assets]);
   const portfolioDividendCycle = useMemo(() => portfolioAnalysis.lines.reduce((sum, line) => sum + (dividendPerShare(line.asset) ?? 0) * line.quantity, 0), [portfolioAnalysis.lines]);
   const marketResults = useMemo(() => searchAssets(marketSearch, marketType, assets, { includeDynamic: false }), [marketSearch, marketType, assets]);
-  const rankedAssets = useMemo(() => [...assets].map((asset) => ({ ...asset, score: calculateAssetScore(asset, weights) })).sort((a, b) => b.score - a.score), [assets, weights]);
+  const rankedAssets = useMemo(() => [...assets].map((asset) => assetWithScore(asset, weights, grahamSettings)).sort((a, b) => b.score - a.score), [assets, weights, grahamSettings]);
+  const opportunityResults = useMemo(() => marketResults.map((asset) => assetWithScore(asset, weights, grahamSettings)).filter((asset) => passesGrahamOpportunityFilters(asset, { onlyBelow: opGrahamOnly, minMargin: opMinMargin, onlyPositiveLpa: opPositiveLpa, onlyPositiveVpa: opPositiveVpa })).sort((a, b) => (analisarNumeroGraham(b).safetyMargin ?? -Infinity) - (analisarNumeroGraham(a).safetyMargin ?? -Infinity)), [marketResults, weights, grahamSettings, opGrahamOnly, opMinMargin, opPositiveLpa, opPositiveVpa]);
+  const rankedOpportunityAssets = useMemo(() => rankedAssets.filter((asset) => passesGrahamOpportunityFilters(asset, { onlyBelow: opGrahamOnly, minMargin: opMinMargin, onlyPositiveLpa: opPositiveLpa, onlyPositiveVpa: opPositiveVpa })), [rankedAssets, opGrahamOnly, opMinMargin, opPositiveLpa, opPositiveVpa]);
+  const radarAssets = useMemo(() => rankedAssets.filter((asset) => passesRadarFilters(asset, { grahamOnly: radarGrahamOnly, minMargin: radarMinMargin, minPotential: radarMinPotential, maxPl: radarMaxPl, maxPvp: radarMaxPvp, minLiquidity: radarMinLiquidity, minRoe: radarMinRoe, maxDebt: radarMaxDebt })), [rankedAssets, radarGrahamOnly, radarMinMargin, radarMinPotential, radarMaxPl, radarMaxPvp, radarMinLiquidity, radarMinRoe, radarMaxDebt]);
   const currentUser = useMemo(() => accounts.find((account) => account.id === sessionId) ?? null, [accounts, sessionId]);
   const clients = useMemo(() => accounts.filter((account) => account.role === "CLIENTE"), [accounts]);
   const financial = useMemo(() => buildFinancialSummary(clients, plans, payments), [clients, plans, payments]);
@@ -506,7 +650,7 @@ export default function AlfatecInvestPro() {
   ], []);
 
   function currentSnapshot(): AppStatePayload {
-    return { accounts, plans, payments, portfolio };
+    return { accounts, plans, payments, portfolio, planPriceHistory, grahamSettings, auditLogs };
   }
 
   function localSnapshot(): AppStatePayload {
@@ -514,7 +658,10 @@ export default function AlfatecInvestPro() {
       accounts: normalizeAccounts(safeParse<Account[]>(window.localStorage.getItem("alfatec-users"), [])),
       plans: normalizePlans(safeParse<Plan[]>(window.localStorage.getItem("alfatec-plans"), defaultPlans)),
       payments: safeParse<Payment[]>(window.localStorage.getItem("alfatec-payments"), []),
-      portfolio: safeParse<PortfolioPosition[]>(window.localStorage.getItem("alfatec-portfolio"), starterPortfolio)
+      portfolio: safeParse<PortfolioPosition[]>(window.localStorage.getItem("alfatec-portfolio"), starterPortfolio),
+      planPriceHistory: safeParse<PlanPriceHistory[]>(window.localStorage.getItem("alfatec-plan-price-history"), []),
+      grahamSettings: normalizeGrahamSettings(safeParse<Partial<GrahamSettings>>(window.localStorage.getItem("alfatec-graham-settings"), defaultGrahamSettings)),
+      auditLogs: safeParse<AuditLog[]>(window.localStorage.getItem("alfatec-audit-logs"), [])
     };
   }
 
@@ -543,6 +690,9 @@ export default function AlfatecInvestPro() {
     setPlans(merged.plans);
     setPayments(merged.payments);
     setPortfolio(merged.portfolio.length ? merged.portfolio : starterPortfolio);
+    setPlanPriceHistory(merged.planPriceHistory);
+    setGrahamSettings(merged.grahamSettings);
+    setAuditLogs(merged.auditLogs);
     setStateLoaded(true);
     setDatabaseError("");
     if (statesDiffer(merged, serverState)) void persistAppState(merged).catch((error) => setDatabaseError(error instanceof Error ? error.message : "Erro ao salvar no banco."));
@@ -564,6 +714,9 @@ export default function AlfatecInvestPro() {
         setPlans(merged.plans);
         setPayments(merged.payments);
         setPortfolio(merged.portfolio.length ? merged.portfolio : starterPortfolio);
+        setPlanPriceHistory(merged.planPriceHistory);
+        setGrahamSettings(merged.grahamSettings);
+        setAuditLogs(merged.auditLogs);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Banco de dados indisponível.";
         console.error("Banco de dados indisponível", error);
@@ -573,6 +726,9 @@ export default function AlfatecInvestPro() {
         setPlans(localState.plans);
         setPayments(localState.payments);
         setPortfolio(localState.portfolio.length ? localState.portfolio : starterPortfolio);
+        setPlanPriceHistory(localState.planPriceHistory);
+        setGrahamSettings(localState.grahamSettings);
+        setAuditLogs(localState.auditLogs);
         setDatabaseError(message);
         setStateLoaded(true);
       }
@@ -584,14 +740,15 @@ export default function AlfatecInvestPro() {
 
   useEffect(() => {
     if (!stateLoaded) return;
-    const snapshot: AppStatePayload = { accounts, plans, payments, portfolio };
+    const snapshot: AppStatePayload = { accounts, plans, payments, portfolio, planPriceHistory, grahamSettings, auditLogs };
     const timeout = window.setTimeout(() => {
       void persistAppState(snapshot).catch((error) => setDatabaseError(error instanceof Error ? error.message : "Erro ao salvar no banco."));
     }, 500);
     return () => window.clearTimeout(timeout);
-  }, [stateLoaded, accounts, plans, payments, portfolio]);
+  }, [stateLoaded, accounts, plans, payments, portfolio, planPriceHistory, grahamSettings, auditLogs]);
 
   useEffect(() => window.localStorage.setItem("alfatec-theme", darkMode ? "dark" : "light"), [darkMode]);
+  useEffect(() => setGrahamY(grahamSettings.defaultY), [grahamSettings.defaultY]);
   useEffect(() => { extraAssets.filter((asset) => asset.source === "external").forEach((asset) => window.localStorage.setItem("alfatec-quote-" + asset.ticker, JSON.stringify(asset))); }, [extraAssets]);
   useEffect(() => { if (sessionId) window.localStorage.setItem("alfatec-session", sessionId); else window.localStorage.removeItem("alfatec-session"); }, [sessionId]);
   async function refreshTicker(tickerInput: string, options: { select?: boolean; silent?: boolean } = {}) {
@@ -712,6 +869,7 @@ export default function AlfatecInvestPro() {
       status: "pendente",
       createdAt: todayIso(),
       dueDate: addDays(plan.durationDays),
+      planStartedAt: todayIso(),
       notes: "Cadastro solicitado pelo usuário. Aguardando liberação do admin.",
       permissions: plan.permissions
     };
@@ -764,7 +922,7 @@ export default function AlfatecInvestPro() {
     const formData = new FormData(event.currentTarget);
     const planId = String(formData.get("planId") ?? "mensal");
     const plan = plans.find((item) => item.id === planId) ?? plans[1];
-    const password = String(formData.get("password") ?? "Invest@123");
+    const password = String(formData.get("password") ?? "Invest@2026!");
     if (!isStrongPassword(password)) {
       alert(passwordRequirementMessage());
       return;
@@ -782,13 +940,14 @@ export default function AlfatecInvestPro() {
       status: "ativo",
       createdAt: todayIso(),
       dueDate: String(formData.get("dueDate") ?? "") || addDays(plan.durationDays),
+      planStartedAt: todayIso(),
       notes: String(formData.get("notes") ?? "").trim(),
       permissions: plan.permissions
     };
     if (!client.name || !client.email) return;
     setAccounts((current) => [client, ...current]);
     setSelectedClientId(client.id);
-    setNewClientPassword("Invest@123");
+    setNewClientPassword("Invest@2026!");
     event.currentTarget.reset();
   }
 
@@ -799,7 +958,32 @@ export default function AlfatecInvestPro() {
   function changeClientPlan(client: Account, planId: string) {
     const plan = plans.find((item) => item.id === planId);
     if (!plan) return;
-    updateClient(client.id, { planId, planValue: plan.value, dueDate: addDays(plan.durationDays), status: "ativo", permissions: plan.permissions });
+    updateClient(client.id, { planId, planValue: plan.value, planStartedAt: todayIso(), dueDate: addDays(plan.durationDays), status: "ativo", permissions: plan.permissions });
+  }
+
+
+  function logAudit(action: string, details: string, risk: AuditLog["risk"] = "baixo") {
+    const actor = currentUser ?? baseAdminAccount();
+    setAuditLogs((current) => [{ id: crypto.randomUUID(), action, userId: actor.id, userName: actor.name, details, createdAt: new Date().toISOString(), risk }, ...current].slice(0, 250));
+  }
+
+  function updateOfficialPlan(planId: string, patch: Partial<Plan>, notes = "") {
+    const previous = plans.find((item) => item.id === planId);
+    if (!previous) return;
+    const next: Plan = { ...previous, ...patch, updatedAt: new Date().toISOString(), updatedBy: currentUser?.name ?? "Admin" };
+    setPlans((current) => current.map((item) => item.id === planId ? next : item));
+    if (patch.value !== undefined && patch.value !== previous.value) {
+      setPlanPriceHistory((current) => [{ id: crypto.randomUUID(), planId, planName: previous.name, previousPrice: previous.value, newPrice: patch.value ?? previous.value, changedByUserId: currentUser?.id ?? "admin", changedByName: currentUser?.name ?? "Admin", notes, createdAt: new Date().toISOString() }, ...current]);
+      logAudit("alteracao_preco_plano", `Plano ${previous.name}: ${money.format(previous.value)} para ${money.format(patch.value ?? previous.value)}.`, "alto");
+    } else {
+      logAudit("alteracao_plano", `Plano ${previous.name} atualizado.`, "medio");
+    }
+  }
+
+  function saveGrahamSettings(patch: Partial<GrahamSettings>) {
+    const next = { ...grahamSettings, ...patch, updatedAt: new Date().toISOString(), updatedBy: currentUser?.name ?? "Admin" };
+    setGrahamSettings(next);
+    logAudit("configuracao_graham", "Parâmetros do Valuation Graham atualizados.", "medio");
   }
 
   function addPayment(event: React.FormEvent<HTMLFormElement>) {
@@ -818,10 +1002,32 @@ export default function AlfatecInvestPro() {
       value: Number(formData.get("value") || plan.value),
       paymentDate: String(formData.get("paymentDate") ?? "") || todayIso(),
       dueDate,
-      status: String(formData.get("status") ?? "pago") as PaymentStatus
+      status: String(formData.get("status") ?? "pago") as PaymentStatus,
+      planName: plan.name,
+      createdBy: currentUser?.id
     };
     setPayments((current) => [payment, ...current]);
-    if (payment.status === "pago") updateClient(clientId, { status: "ativo", planId, planValue: plan.value, dueDate, permissions: plan.permissions });
+    if (payment.status === "pago") updateClient(clientId, { status: "ativo", planId, planValue: payment.value, planStartedAt: todayIso(), dueDate, permissions: plan.permissions });
+    logAudit("pagamento_registrado", `Pagamento ${payment.status} para ${client.name} no plano ${plan.name}.`, payment.status === "pago" ? "baixo" : "medio");
+    event.currentTarget.reset();
+  }
+
+  function renewClientPlan(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const clientId = String(formData.get("clientId") ?? "");
+    const planId = String(formData.get("planId") ?? "");
+    const mode = String(formData.get("renewalMode") ?? "today") as "today" | "extend";
+    const plan = plans.find((item) => item.id === planId);
+    const client = clients.find((item) => item.id === clientId);
+    if (!client || !plan) return;
+    const amount = Number(formData.get("value") || plan.value);
+    const baseDate = mode === "extend" && client.dueDate && !isExpired(client.dueDate) ? client.dueDate : todayIso();
+    const dueDate = addDaysToDate(baseDate, plan.durationDays);
+    const payment: Payment = { id: crypto.randomUUID(), clientId, planId, value: amount, paymentDate: todayIso(), dueDate, status: "pago", planName: plan.name, notes: mode === "extend" ? "Renovação acrescentada ao vencimento atual." : "Renovação a partir da data atual.", createdBy: currentUser?.id, renewalMode: mode };
+    setPayments((current) => [payment, ...current]);
+    updateClient(clientId, { status: "ativo", planId, planValue: amount, planStartedAt: todayIso(), dueDate, permissions: plan.permissions });
+    logAudit("renovacao_plano", `Plano ${plan.name} renovado para ${client.name} até ${dueDate}.`, "medio");
     event.currentTarget.reset();
   }
 
@@ -973,12 +1179,12 @@ export default function AlfatecInvestPro() {
                           <select aria-label="Plano do cliente" value={client.planId ?? ""} onChange={(e) => changeClientPlan(client, e.target.value)} className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-white/10 dark:bg-slate-950">
                             {plans.map((planItem) => <option key={planItem.id} value={planItem.id}>{planItem.name}</option>)}
                           </select>
-                          <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold dark:border-white/10 dark:bg-slate-950">{money.format(plan?.value ?? client.planValue ?? 0)}</div>
+                          <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold dark:border-white/10 dark:bg-slate-950">{money.format(client.planValue ?? plan?.value ?? 0)}</div>
                           <input type="date" value={client.dueDate ?? ""} onChange={(e) => updateClient(client.id, { dueDate: e.target.value, status: e.target.value < todayIso() ? "vencido" : "ativo" })} className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-white/10 dark:bg-slate-950" />
-                          {client.status === "pendente" ? <button onClick={() => updateClient(client.id, { status: "ativo", dueDate: client.dueDate || addDays(plan?.durationDays ?? 30), permissions: plan?.permissions ?? client.permissions, planValue: plan?.value ?? client.planValue })} className="rounded-2xl bg-emerald-500 px-3 py-2 text-sm font-bold text-white"><Unlock className="mr-1 inline h-4 w-4" />Liberar acesso</button> : <button onClick={() => updateClient(client.id, { status: client.status === "bloqueado" ? "ativo" : "bloqueado" })} className={cls("rounded-2xl px-3 py-2 text-sm font-bold", client.status === "bloqueado" ? "bg-emerald-500 text-white" : "bg-red-500 text-white")}>{client.status === "bloqueado" ? <Unlock className="mr-1 inline h-4 w-4" /> : <Lock className="mr-1 inline h-4 w-4" />}{client.status === "bloqueado" ? "Desbloquear" : "Bloquear"}</button>}
+                          {client.status === "pendente" ? <button onClick={() => updateClient(client.id, { status: "ativo", dueDate: client.dueDate || addDays(plan?.durationDays ?? 30), permissions: plan?.permissions ?? client.permissions, planValue: client.planValue ?? plan?.value, planStartedAt: todayIso() })} className="rounded-2xl bg-emerald-500 px-3 py-2 text-sm font-bold text-white"><Unlock className="mr-1 inline h-4 w-4" />Liberar acesso</button> : <button onClick={() => updateClient(client.id, { status: client.status === "bloqueado" ? "ativo" : "bloqueado" })} className={cls("rounded-2xl px-3 py-2 text-sm font-bold", client.status === "bloqueado" ? "bg-emerald-500 text-white" : "bg-red-500 text-white")}>{client.status === "bloqueado" ? <Unlock className="mr-1 inline h-4 w-4" /> : <Lock className="mr-1 inline h-4 w-4" />}{client.status === "bloqueado" ? "Desbloquear" : "Bloquear"}</button>}
                           <button onClick={() => setAccounts((current) => current.filter((account) => account.id !== client.id))} className="rounded-2xl bg-slate-100 px-3 py-2 text-sm font-bold text-red-500 dark:bg-white/10"><Trash2 className="mr-1 inline h-4 w-4" />Excluir</button>
                         </div>
-                        <p className="mt-2 text-xs font-semibold text-slate-500 dark:text-slate-300">Valor atual da assinatura: {money.format(plan?.value ?? client.planValue ?? 0)}</p>
+                        <p className="mt-2 text-xs font-semibold text-slate-500 dark:text-slate-300">Valor atual da assinatura: {money.format(client.planValue ?? plan?.value ?? 0)}</p>
                         <button onClick={() => setSelectedClientId(selectedClientId === client.id ? null : client.id)} className="mt-3 text-sm font-bold text-teal-500">{selectedClientId === client.id ? "Ocultar permissões" : "Editar permissões"}</button>
                         {selectedClientId === client.id && <PermissionsEditor client={client} updateClient={updateClient} />}
                       </div>
@@ -993,7 +1199,7 @@ export default function AlfatecInvestPro() {
         {adminModule === "planos" && (
           <Section title="Planos" subtitle="Configure valores, duração, status e permissões sem alterar clientes já cadastrados." eyebrow="Liberação comercial">
             <div className="mb-5 rounded-3xl border border-cyan-400/30 bg-cyan-500/10 p-4 text-sm font-semibold text-cyan-800 dark:text-cyan-200">
-              Alterações feitas aqui atualizam o valor da assinatura de todos os clientes vinculados ao plano, sem apagar cadastros, status, vencimentos ou permissões.
+              Alterações de preço feitas aqui viram o novo valor oficial do plano, mas não alteram retroativamente pagamentos ou assinaturas já registradas.
             </div>
             <div className="grid gap-6 lg:grid-cols-3">
               {plans.map((plan) => <PlanCard key={plan.id} plan={plan} setPlans={setPlans} setAccounts={setAccounts} />)}
@@ -1009,6 +1215,7 @@ export default function AlfatecInvestPro() {
               <MetricCard label="Valores recebidos" value={money.format(financial.received)} icon={CircleDollarSign} tone="teal" />
               <MetricCard label="Valores pendentes" value={money.format(financial.pending)} icon={CalendarDays} tone="red" />
             </div>
+            <div className="mt-6"><PlanValuesManager plans={plans} history={planPriceHistory} clients={clients} payments={payments} onUpdatePlan={updateOfficialPlan} /></div>
             <div className="mt-6 grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
               <PremiumCard title="Registrar pagamento" description="Baixe um pagamento e renove o acesso do cliente." icon={CircleDollarSign}>
                 <form onSubmit={addPayment} className="grid gap-3">
@@ -1033,6 +1240,7 @@ export default function AlfatecInvestPro() {
                 </div>
               </PremiumCard>
             </div>
+            <div className="mt-6"><RenewPlanCard clients={clients} plans={plans} onRenew={renewClientPlan} /></div>
           </Section>
         )}
 
@@ -1059,6 +1267,7 @@ export default function AlfatecInvestPro() {
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
               {dashboardCards.map((card) => <MetricCard key={card.label} {...card} />)}
             </div>
+            {currentUser.role === "CLIENTE" && planAlertText(currentUser) && <div className="mt-5 rounded-3xl border border-amber-400/40 bg-amber-500/10 p-4 text-sm font-bold text-amber-700 dark:text-amber-300">{planAlertText(currentUser)}</div>}
             <div className="mt-6 grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
               <PremiumCard title="Evolução do patrimônio" description="Linha acumulada com base na carteira do usuário." icon={LineChartIcon}>
                 <div className="h-80"><ResponsiveContainer width="100%" height="100%"><AreaChart data={buildEquityCurve(portfolioAnalysis.lines)}><defs><linearGradient id="equity" x1="0" x2="0" y1="0" y2="1"><stop offset="5%" stopColor="#14b8a6" stopOpacity={0.45}/><stop offset="95%" stopColor="#14b8a6" stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" opacity={0.18} /><XAxis dataKey="label" hide /><YAxis tickFormatter={(value) => compactMoney.format(Number(value))} width={80} /><Tooltip formatter={(value) => money.format(Number(value))} /><Area type="monotone" dataKey="value" name="Patrimônio" stroke="#14b8a6" strokeWidth={3} fill="url(#equity)" /></AreaChart></ResponsiveContainer></div>
@@ -1104,16 +1313,17 @@ export default function AlfatecInvestPro() {
                     <p className="text-xs text-slate-500 dark:text-slate-400">A recomendação é uma leitura automatizada do radar, não uma orientação personalizada de investimento.</p>
                   </div>
                 </PremiumCard>
-                <PremiumCard title="Filtros rápidos" description="Use para filtrar e encontrar oportunidades por tipo de mercado." icon={Search}>
+                <PremiumCard title="Filtros rápidos" description="Use para filtrar oportunidades por mercado e Número de Graham." icon={Search}>
                   <div className="mb-4 flex flex-col gap-3 lg:flex-row">
                     <div className="relative flex-1"><Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" /><input value={marketSearch} onChange={(e) => setMarketSearch(e.target.value)} placeholder="Ex.: GARE11, dividendos, logística, banco..." className="h-12 w-full rounded-2xl border border-slate-200 bg-white pl-12 pr-4 outline-none focus:border-teal-400 dark:border-white/10 dark:bg-white/5" /></div>
                     <select value={marketType} onChange={(e) => setMarketType(e.target.value as AssetType | "TODOS")} className="h-12 rounded-2xl border border-slate-200 bg-white px-4 dark:border-white/10 dark:bg-slate-950">{assetTypeOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
                   </div>
-                  <div className="space-y-3">{marketResults.slice(0, 8).map((asset, index) => <RankingRow key={asset.ticker} asset={{ ...asset, score: calculateAssetScore(asset, weights) }} index={index + 1} onClick={() => selectAsset(asset, "mercado")} />)}</div>
+                  <GrahamOpportunityFilter onlyBelow={opGrahamOnly} setOnlyBelow={setOpGrahamOnly} minMargin={opMinMargin} setMinMargin={setOpMinMargin} onlyPositiveLpa={opPositiveLpa} setOnlyPositiveLpa={setOpPositiveLpa} onlyPositiveVpa={opPositiveVpa} setOnlyPositiveVpa={setOpPositiveVpa} />
+                  <div className="mt-4 space-y-3">{opportunityResults.slice(0, 8).map((asset, index) => <RankingRow key={asset.ticker} asset={asset} index={index + 1} onClick={() => selectAsset(asset, "mercado")} />)}</div>
                 </PremiumCard>
               </div>
               <PremiumCard title="Melhores scores do mercado" description="Classificação automatizada com critérios transparentes. Não é recomendação personalizada." icon={TrendingUp}>
-                <div className="space-y-3">{rankedAssets.slice(0, 12).map((asset, index) => <RankingRow key={asset.ticker} asset={asset} index={index + 1} onClick={() => selectAsset(asset, "mercado")} />)}</div>
+                <GrahamOpportunityTable assets={rankedOpportunityAssets.slice(0, 12)} onSelect={(asset) => selectAsset(asset, "mercado")} />
               </PremiumCard>
             </div>
           </Section>
@@ -1131,6 +1341,7 @@ export default function AlfatecInvestPro() {
                 <div className="mt-5 grid gap-4 lg:grid-cols-2"><PerformancePill asset={assetA} value={returnA} /><PerformancePill asset={assetB} value={returnB} /></div>
                 <div className="mt-5 h-[430px]"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={comparison}><CartesianGrid strokeDasharray="3 3" opacity={0.16} /><XAxis dataKey="label" minTickGap={28} /><YAxis yAxisId="left" unit="%" /><YAxis yAxisId="right" orientation="right" tickFormatter={(value) => compactMoney.format(Number(value))} /><Tooltip formatter={(value, name) => name === "Volume" ? compactMoney.format(Number(value)) : `${value}%`} /><Legend /><Bar yAxisId="right" dataKey="volumeA" name="Volume" fill="#334155" opacity={0.22} /><Line yAxisId="left" type="monotone" dataKey={assetA.ticker} name={`${assetA.ticker} %`} stroke="#14b8a6" strokeWidth={3} dot={false} /><Line yAxisId="left" type="monotone" dataKey={assetB.ticker} name={`${assetB.ticker} %`} stroke="#38bdf8" strokeWidth={3} dot={false} /></ComposedChart></ResponsiveContainer></div>
                 <ComparisonTable a={assetA} b={assetB} />
+                <GrahamComparison a={assetA} b={assetB} />
               </PremiumCard>
               <ComparisonRecommendationCard recommendation={comparisonRecommendation} a={assetA} b={assetB} returnA={returnA} returnB={returnB} />
             </div>
@@ -1156,11 +1367,15 @@ export default function AlfatecInvestPro() {
           </Section>
         )}
 
+        {clientModule === "graham_valuation" && <GrahamValuationSection assets={assets} selectedAsset={grahamAsset} search={grahamSearch} setSearch={setGrahamSearch} setSelectedAsset={setGrahamAsset} currentUser={currentUser} settings={grahamSettings} saveSettings={saveGrahamSettings} growth={grahamGrowth} setGrowth={setGrahamGrowth} y={grahamY} setY={setGrahamY} />}
+
+        {clientModule === "plano" && <ClientPlanSection user={currentUser} plans={plans} payments={payments} />}
+
         {clientModule === "radar" && (
           <Section title="Radar IA" subtitle="Ranking de oportunidades com score transparente e configurável." eyebrow="Inteligência automatizada">
             <div className="grid gap-6 xl:grid-cols-[0.75fr_1.25fr]">
-              <PremiumCard title="Critérios do score" description="Ajuste os pesos da avaliação." icon={Settings}>{Object.entries(weights).map(([key, value]) => <WeightSlider key={key} label={radarLabel(key)} value={value} onChange={(next) => setWeights((current) => ({ ...current, [key]: next }))} />)}</PremiumCard>
-              <PremiumCard title="Ranking geral" description="Ações, FIIs, ETFs, BDRs e criptomoedas." icon={BrainCircuit}><div className="space-y-3">{[...assets].map((asset) => ({ ...asset, score: calculateAssetScore(asset, weights) })).sort((a, b) => b.score - a.score).slice(0, 15).map((asset, index) => <RankingRow key={asset.ticker} asset={asset} index={index + 1} onClick={() => selectAsset(asset, "mercado")} />)}</div></PremiumCard>
+              <PremiumCard title="Critérios do score" description="Ajuste pesos e filtros do Radar IA." icon={Settings}>{Object.entries(weights).map(([key, value]) => <WeightSlider key={key} label={radarLabel(key)} value={value} onChange={(next) => setWeights((current) => ({ ...current, [key]: next }))} />)}<RadarGrahamFilters grahamOnly={radarGrahamOnly} setGrahamOnly={setRadarGrahamOnly} minMargin={radarMinMargin} setMinMargin={setRadarMinMargin} minPotential={radarMinPotential} setMinPotential={setRadarMinPotential} maxPl={radarMaxPl} setMaxPl={setRadarMaxPl} maxPvp={radarMaxPvp} setMaxPvp={setRadarMaxPvp} minLiquidity={radarMinLiquidity} setMinLiquidity={setRadarMinLiquidity} minRoe={radarMinRoe} setMinRoe={setRadarMinRoe} maxDebt={radarMaxDebt} setMaxDebt={setRadarMaxDebt} /></PremiumCard>
+              <PremiumCard title="Ranking geral" description="Número de Graham contribui no máximo com 15% do score." icon={BrainCircuit}><div className="space-y-3">{radarAssets.slice(0, 15).map((asset, index) => <RankingRow key={asset.ticker} asset={asset} index={index + 1} onClick={() => selectAsset(asset, "mercado")} />)}</div></PremiumCard>
             </div>
           </Section>
         )}
@@ -1460,6 +1675,58 @@ function ComparisonTable({ a, b }: { a: Asset; b: Asset }) {
   ];
   return <div className="mt-5 overflow-hidden rounded-3xl border border-slate-200 text-sm dark:border-white/10"><div className="grid grid-cols-3 bg-slate-50 p-3 font-bold dark:bg-white/5"><span>Indicador</span><span>{a.ticker}</span><span>{b.ticker}</span></div>{rows.map((row) => <div key={row[0]} className="grid grid-cols-3 border-t border-slate-100 p-3 dark:border-white/10"><span className="text-slate-500 dark:text-slate-300">{row[0]}</span><strong>{row[1]}</strong><strong>{row[2]}</strong></div>)}</div>;
 }
+
+function GrahamOpportunityTable({ assets, onSelect }: { assets: Asset[]; onSelect: (asset: Asset) => void }) {
+  return <div className="overflow-x-auto"><table className="min-w-full text-sm"><thead><tr className="text-left text-slate-500 dark:text-slate-300"><th className="p-3">Ticker</th><th className="p-3">Preço</th><th className="p-3">Valor de Graham</th><th className="p-3">Margem</th><th className="p-3">Potencial Graham</th><th className="p-3">Situação</th><th className="p-3">Score</th></tr></thead><tbody>{assets.map((asset) => { const graham = analisarNumeroGraham(asset); return <tr key={asset.ticker} onClick={() => onSelect(asset)} className="cursor-pointer border-t border-slate-100 transition hover:bg-slate-50 dark:border-white/10 dark:hover:bg-white/5"><td className="p-3 font-black">{asset.ticker}<p className="text-xs font-normal text-slate-500 dark:text-slate-300">{asset.name}</p></td><td className="p-3">{money.format(asset.price)}</td><td className="p-3 font-black">{graham.value === undefined ? "-" : money.format(graham.value)}</td><td className="p-3">{graham.safetyMargin === undefined ? "-" : pct(graham.safetyMargin)}</td><td className="p-3">{graham.potential === undefined ? "-" : pct(graham.potential)}</td><td className="p-3">{graham.classification ?? "Dados insuficientes"}</td><td className="p-3 font-black text-cyan-600 dark:text-cyan-300">{asset.score}/100</td></tr>; })}</tbody></table>{assets.length === 0 && <p className="p-4 text-sm text-slate-500 dark:text-slate-400">Nenhum ativo atende aos filtros atuais.</p>}<p className="mt-4 rounded-2xl bg-cyan-500/10 p-3 text-xs font-semibold text-cyan-700 dark:text-cyan-300">O Número de Graham é combinado com liquidez, rentabilidade, endividamento, ROE, P/L, P/VP, histórico, volatilidade e qualidade dos dados. Ele não é critério único de oportunidade.</p></div>;
+}
+
+function RadarGrahamFilters({ grahamOnly, setGrahamOnly, minMargin, setMinMargin, minPotential, setMinPotential, maxPl, setMaxPl, maxPvp, setMaxPvp, minLiquidity, setMinLiquidity, minRoe, setMinRoe, maxDebt, setMaxDebt }: { grahamOnly: boolean; setGrahamOnly: (value: boolean) => void; minMargin: number; setMinMargin: (value: number) => void; minPotential: number; setMinPotential: (value: number) => void; maxPl: number; setMaxPl: (value: number) => void; maxPvp: number; setMaxPvp: (value: number) => void; minLiquidity: number; setMinLiquidity: (value: number) => void; minRoe: number; setMinRoe: (value: number) => void; maxDebt: number; setMaxDebt: (value: number) => void }) {
+  return <div className="mt-5 rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/5"><p className="mb-3 text-sm font-black">Filtros de Graham e risco</p><div className="grid gap-3 text-sm"><label className="flex items-center gap-2"><input type="checkbox" checked={grahamOnly} onChange={(e) => setGrahamOnly(e.target.checked)} />Preço abaixo do Número de Graham</label><Input label="Margem de segurança maior que (%)" type="number" value={minMargin} onChange={(e) => setMinMargin(Number(e.target.value))} /><Input label="Potencial maior que (%)" type="number" value={minPotential} onChange={(e) => setMinPotential(Number(e.target.value))} /><Input label="P/L abaixo de" type="number" value={maxPl} onChange={(e) => setMaxPl(Number(e.target.value))} /><Input label="P/VP abaixo de" type="number" value={maxPvp} onChange={(e) => setMaxPvp(Number(e.target.value))} /><Input label="Liquidez mínima" type="number" value={minLiquidity} onChange={(e) => setMinLiquidity(Number(e.target.value))} /><Input label="ROE mínimo (%)" type="number" value={minRoe} onChange={(e) => setMinRoe(Number(e.target.value))} /><Input label="Dívida máxima" type="number" value={maxDebt} onChange={(e) => setMaxDebt(Number(e.target.value))} /></div><p className="mt-3 text-xs text-slate-500 dark:text-slate-400">O Número de Graham contribui como componente do valuation e não ultrapassa 15% do score total.</p></div>;
+}
+
+function GrahamValuationSection({ assets, selectedAsset, search, setSearch, setSelectedAsset, currentUser, settings, saveSettings, growth, setGrowth, y, setY }: { assets: Asset[]; selectedAsset: Asset; search: string; setSearch: (value: string) => void; setSelectedAsset: (asset: Asset) => void; currentUser: Account; settings: GrahamSettings; saveSettings: (patch: Partial<GrahamSettings>) => void; growth: number; setGrowth: (value: number) => void; y: number; setY: (value: number) => void }) {
+  const graham = analisarNumeroGraham(selectedAsset);
+  const inputs = deriveGrahamInputs(selectedAsset);
+  const growthValue = inputs.lpa ? calcularGrahamCrescimento(inputs.lpa, growth, y) : null;
+  const growthPotential = growthValue === null ? null : calcularPotencial(growthValue, selectedAsset.price);
+  const growthMargin = growthValue === null ? null : calcularMargemSeguranca(growthValue, selectedAsset.price);
+  const scenarios = aplicarPrecoNosCenarios(calcularCenariosGraham(inputs.lpa ?? 0, y, growth, currentUser.role === "ADMIN" ? "administrador" : "usuario"), selectedAsset.price);
+  const canEdit = currentUser.role === "ADMIN" || settings.clientsCanEditGrowth || settings.clientsCanEditY;
+  const warning = growth > settings.maxGrowth ? "Taxas elevadas de crescimento podem produzir resultados excessivamente otimistas." : undefined;
+
+  return <Section title="Valuation Graham" subtitle="Dois métodos de Benjamin Graham com fontes, datas, premissas e limitações visíveis." eyebrow="Valuation"><div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]"><div className="space-y-6"><PremiumCard title="Pesquisar ativo" description="Selecione uma ação para calcular os métodos." icon={Search}><SearchBox label="Ativo" value={search} onChange={setSearch} assets={assets} onSelect={(asset) => { setSelectedAsset(asset); setSearch(asset.ticker); }} /><div className="mt-4 grid gap-3 sm:grid-cols-2"><InfoTile label="Ativo" value={`${selectedAsset.ticker} - ${selectedAsset.name}`} /><InfoTile label="Última atualização" value={new Date(selectedAsset.lastUpdatedAt ?? selectedAsset.updatedAt).toLocaleString("pt-BR")} /><InfoTile label="Fonte" value={selectedAsset.sourceLabel ?? (selectedAsset.source === "external" ? "Google Finance via provedor externo" : "Base interna/fornecedor")} /><InfoTile label="Tipo" value={typeLabels[selectedAsset.type]} /></div></PremiumCard>{currentUser.role === "ADMIN" && <PremiumCard title="Configuração administrativa" description="Parâmetros oficiais para Y, crescimento e score." icon={Settings}><div className="grid gap-3"><Input label="Y padrão (%)" type="number" step="0.1" value={settings.defaultY} onChange={(e) => saveSettings({ defaultY: Number(e.target.value) })} /><Input label="Crescimento mínimo (%)" type="number" value={settings.minGrowth} onChange={(e) => saveSettings({ minGrowth: Number(e.target.value) })} /><Input label="Crescimento máximo recomendado (%)" type="number" value={settings.maxGrowth} onChange={(e) => saveSettings({ maxGrowth: Number(e.target.value) })} /><Input label="Peso Graham no score" type="number" max="15" value={settings.scoreWeight} onChange={(e) => saveSettings({ scoreWeight: Math.min(15, Number(e.target.value)) })} /><Toggle label="Cálculo ativo" checked={settings.enabled} onChange={(value) => saveSettings({ enabled: value })} /><Toggle label="Cliente edita crescimento" checked={settings.clientsCanEditGrowth} onChange={(value) => saveSettings({ clientsCanEditGrowth: value })} /><Toggle label="Cliente edita Y" checked={settings.clientsCanEditY} onChange={(value) => saveSettings({ clientsCanEditY: value })} /></div><p className="mt-3 text-xs text-slate-500 dark:text-slate-400">Y exibido como parâmetro configurado pelo administrador quando não houver integração confiável para títulos corporativos AAA.</p></PremiumCard>}<GrahamExplanation /></div><div className="space-y-6"><GrahamNumberCard analysis={graham} /><GrahamGrowthCard price={selectedAsset.price} lpa={inputs.lpa} growth={growth} y={y} value={growthValue} potential={growthPotential} safetyMargin={growthMargin} sourceLabel={`Crescimento informado pelo usuário; Y: Parâmetro configurado pelo administrador`} updatedAt={new Date().toISOString()} scenarios={scenarios} warning={warning} canEdit={canEdit} onGrowthChange={(value) => settings.clientsCanEditGrowth || currentUser.role === "ADMIN" ? setGrowth(value) : undefined} onYChange={(value) => settings.clientsCanEditY || currentUser.role === "ADMIN" ? setY(value) : undefined} /></div></div></Section>;
+}
+
+function ClientPlanSection({ user, plans, payments }: { user: Account; plans: Plan[]; payments: Payment[] }) {
+  const plan = plans.find((item) => item.id === user.planId);
+  const lastPayment = [...payments].filter((payment) => payment.clientId === user.id).sort((a, b) => b.paymentDate.localeCompare(a.paymentDate))[0];
+  const days = calcularDiasRestantes(user.dueDate ?? todayIso());
+  const status = planVisualStatus(user);
+  const alert = planAlertText(user);
+  return <Section title="Plano" subtitle="Assinatura, vencimento, dias restantes e recursos liberados." eyebrow="Meu acesso"><div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]"><PremiumCard title="Plano atual" description="Valor contratado e validade do acesso." icon={WalletCards}><div className="grid gap-3 sm:grid-cols-2"><InfoTile label="Plano" value={plan?.name ?? "Sem plano"} /><InfoTile label="Valor" value={money.format(user.planValue ?? plan?.value ?? 0)} /><InfoTile label="Início" value={user.planStartedAt ? new Date(user.planStartedAt).toLocaleDateString("pt-BR") : "-"} /><InfoTile label="Vencimento" value={user.dueDate ? new Date(user.dueDate).toLocaleDateString("pt-BR") : "-"} /><InfoTile label="Duração" value={`${plan?.durationDays ?? 0} dias`} /><InfoTile label="Dias restantes" value={`${days} dias`} /><InfoTile label="Status" value={status.label} /><InfoTile label="Último pagamento" value={lastPayment ? money.format(lastPayment.value) : "-"} /></div>{alert && <p className="mt-4 rounded-2xl bg-amber-500/10 p-3 text-sm font-bold text-amber-700 dark:text-amber-300">{alert}</p>}<p className="mt-4 rounded-2xl bg-slate-50 p-3 text-sm text-slate-600 dark:bg-white/5 dark:text-slate-300">{status.detail}</p><a href="mailto:admin@alfatec.local" className="mt-4 inline-flex rounded-2xl bg-cyan-500 px-5 py-3 font-bold text-white">Entrar em contato com o administrador</a></PremiumCard><PremiumCard title="Menus liberados" description="Recursos disponíveis conforme plano e permissões do cliente." icon={ShieldCheck}><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{clientModules.map((module) => <div key={module.id} className={cls("rounded-2xl p-3 text-sm font-bold", user.permissions.includes(module.id) ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "bg-slate-100 text-slate-500 dark:bg-white/5 dark:text-slate-400")}>{user.permissions.includes(module.id) ? "Liberado" : "Bloqueado"} - {module.label}</div>)}</div></PremiumCard></div></Section>;
+}
+
+function PlanPriceEditor({ plan, onUpdatePlan }: { plan: Plan; onUpdatePlan: (planId: string, patch: Partial<Plan>, notes?: string) => void }) {
+  const [value, setValue] = useState(plan.value);
+  const [durationDays, setDurationDays] = useState(plan.durationDays);
+  const [status, setStatus] = useState<Plan["status"]>(plan.status);
+  const [notes, setNotes] = useState(plan.notes ?? "");
+  useEffect(() => { setValue(plan.value); setDurationDays(plan.durationDays); setStatus(plan.status); setNotes(plan.notes ?? ""); }, [plan]);
+  return <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/5"><div className="flex items-center justify-between gap-3"><div><h4 className="font-black">Plano {plan.name}</h4><p className="text-xs text-slate-500 dark:text-slate-400">Atualizado por {plan.updatedBy ?? "Sistema"} em {plan.updatedAt ? new Date(plan.updatedAt).toLocaleString("pt-BR") : "-"}</p></div><StatusPill status={status === "ativo" ? "ativo" : "bloqueado"} /></div><div className="mt-4 grid gap-3 sm:grid-cols-2"><Input label="Valor atual" type="number" step="0.01" value={value} onChange={(e) => setValue(Number(e.target.value))} /><Input label="Duração em dias" type="number" value={durationDays} onChange={(e) => setDurationDays(Number(e.target.value))} /><Select label="Status" value={status} onChange={(e) => setStatus(e.target.value as Plan["status"])}><option value="ativo">Ativo</option><option value="inativo">Inativo</option></Select><Input label="Observação" value={notes} onChange={(e) => setNotes(e.target.value)} /></div><div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={() => onUpdatePlan(plan.id, { value, durationDays, status, notes }, notes)} className="rounded-2xl bg-cyan-500 px-4 py-3 text-sm font-bold text-white">Salvar</button><button type="button" onClick={() => { setValue(plan.value); setDurationDays(plan.durationDays); setStatus(plan.status); setNotes(plan.notes ?? ""); }} className="rounded-2xl bg-slate-200 px-4 py-3 text-sm font-bold text-slate-700 dark:bg-white/10 dark:text-slate-100">Cancelar</button><button type="button" onClick={() => { const next = status === "ativo" ? "inativo" : "ativo"; setStatus(next); onUpdatePlan(plan.id, { status: next }, notes); }} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-bold text-white dark:bg-white dark:text-slate-950">{status === "ativo" ? "Desativar" : "Ativar"}</button></div></div>;
+}
+
+function PlanValuesManager({ plans, history, clients, payments, onUpdatePlan }: { plans: Plan[]; history: PlanPriceHistory[]; clients: Account[]; payments: Payment[]; onUpdatePlan: (planId: string, patch: Partial<Plan>, notes?: string) => void }) {
+  const monthlyForecast = clients.filter((client) => client.status === "ativo").reduce((sum, client) => sum + (client.planValue ?? plans.find((plan) => plan.id === client.planId)?.value ?? 0), 0);
+  const expiringSeven = clients.filter((client) => calcularDiasRestantes(client.dueDate ?? todayIso()) <= 7 && !isExpired(client.dueDate)).length;
+  return <PremiumCard title="Valores dos Planos" description="Fonte única de verdade para novos cadastros, renovações e cobranças." icon={CircleDollarSign}><div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3"><InfoTile label="Valor semanal" value={money.format(plans.find((plan) => plan.id === "semanal")?.value ?? 0)} /><InfoTile label="Valor mensal" value={money.format(plans.find((plan) => plan.id === "mensal")?.value ?? 0)} /><InfoTile label="Valor anual" value={money.format(plans.find((plan) => plan.id === "anual")?.value ?? 0)} /><InfoTile label="Receita mensal prevista" value={money.format(monthlyForecast)} /><InfoTile label="Receita anual prevista" value={money.format(monthlyForecast * 12)} /><InfoTile label="Planos vencendo em 7 dias" value={String(expiringSeven)} /></div><div className="grid gap-4 xl:grid-cols-3">{plans.map((plan) => <PlanPriceEditor key={plan.id} plan={plan} onUpdatePlan={onUpdatePlan} />)}</div><div className="mt-5 rounded-3xl border border-slate-200 p-4 dark:border-white/10"><h4 className="font-black">Histórico de alteração de preço</h4><div className="mt-3 space-y-2">{history.slice(0, 8).map((item) => <div key={item.id} className="grid gap-2 rounded-2xl bg-slate-50 p-3 text-sm dark:bg-white/5 sm:grid-cols-5"><strong>{item.planName}</strong><span>{money.format(item.previousPrice)}</span><span>{money.format(item.newPrice)}</span><span>{item.changedByName}</span><span>{new Date(item.createdAt).toLocaleString("pt-BR")}</span></div>)}{history.length === 0 && <p className="text-sm text-slate-500 dark:text-slate-400">Nenhuma alteração de preço registrada.</p>}</div></div><p className="mt-4 text-xs text-slate-500 dark:text-slate-400">Pagamentos antigos permanecem com o valor registrado na época. Novas cobranças usam o valor vigente do plano.</p></PremiumCard>;
+}
+
+function RenewPlanCard({ clients, plans, onRenew }: { clients: Account[]; plans: Plan[]; onRenew: (event: React.FormEvent<HTMLFormElement>) => void }) {
+  const [selectedPlan, setSelectedPlan] = useState(plans[0]?.id ?? "mensal");
+  const plan = plans.find((item) => item.id === selectedPlan) ?? plans[0];
+  return <PremiumCard title="Renovar plano" description="Registra pagamento e atualiza o vencimento do cliente." icon={RefreshCw}><form onSubmit={onRenew} className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5"><Select name="clientId" label="Cliente" required>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</Select><Select name="planId" label="Plano" value={selectedPlan} onChange={(e) => setSelectedPlan(e.target.value)} required>{plans.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select><Input name="value" type="number" step="0.01" label="Valor" defaultValue={plan?.value ?? 0} /><Select name="renewalMode" label="Regra"><option value="today">A partir da data atual</option><option value="extend">Acrescentar ao vencimento atual</option></Select><button className="self-end rounded-2xl bg-teal-500 px-4 py-3 font-bold text-white">Renovar plano</button></form><p className="mt-3 text-xs text-slate-500 dark:text-slate-400">O valor vigente é copiado para o pagamento/assinatura desta renovação e não muda se o plano for reajustado no futuro.</p></PremiumCard>;
+}
+
 function PasswordRequirementList({ value }: { value: string }) {
   return <div className="mt-3 grid gap-2 text-sm text-slate-500 dark:text-slate-400">{passwordChecks(value).map((item) => <div key={item.id} className={cls("flex items-center gap-2", item.valid && "text-emerald-500")}><span className={cls("grid h-5 w-5 place-items-center rounded-full border", item.valid ? "border-emerald-500 bg-emerald-500 text-white" : "border-slate-400")}>{item.valid && <CheckCircle2 className="h-3.5 w-3.5" />}</span><span>{item.label}</span></div>)}</div>;
 }
@@ -1483,13 +1750,16 @@ function WeightSlider({ label, value, onChange }: { label: string; value: number
 }
 function RankingRow({ asset, index, onClick }: { asset: Asset; index: number; onClick: () => void }) {
   const dividend = dividendPerShare(asset);
+  const graham = analisarNumeroGraham(asset);
+  const grahamContribution = grahamScoreContribution(asset);
   return (
     <button onClick={onClick} className="flex w-full items-center gap-4 rounded-3xl border border-slate-200 bg-white p-4 text-left transition hover:scale-[1.01] hover:shadow-premium dark:border-white/10 dark:bg-white/5">
       <span className="grid h-10 w-10 place-items-center rounded-2xl bg-slate-950 font-black text-white dark:bg-white dark:text-slate-950">{index}</span>
       <span className="min-w-0 flex-1">
-        <strong>{asset.ticker}</strong><span className="ml-2 text-sm text-slate-500">{asset.name}</span>
-        <p className="mt-1 text-xs text-slate-400">{typeLabels[asset.type]} • {asset.segment}</p>
-        <p className="mt-2 text-xs font-semibold text-cyan-700 dark:text-cyan-300">Dividendos: {dividendFrequency(asset)} • {dividend === undefined ? "sem valor recorrente" : `${money.format(dividend)} por ação/cota`}</p>
+        <strong>{asset.ticker}</strong><span className="ml-2 text-sm text-slate-500 dark:text-slate-300">{asset.name}</span>
+        <p className="mt-1 text-xs text-slate-400">{typeLabels[asset.type]} ? {asset.segment}</p>
+        <p className="mt-2 text-xs font-semibold text-cyan-700 dark:text-cyan-300">Dividendos: {dividendFrequency(asset)} ? {dividend === undefined ? "sem valor recorrente" : `${money.format(dividend)} por ação/cota`}</p>
+        <p className="mt-1 text-xs font-semibold text-slate-600 dark:text-slate-300">Graham: {graham.value === undefined ? "não aplicável" : `${money.format(graham.value)} - margem ${pct(graham.safetyMargin)}`} - contribuição {grahamContribution}/10</p>
       </span>
       <span className="rounded-full bg-cyan-500/10 px-3 py-1 font-black text-cyan-600 dark:text-cyan-300">{asset.score}</span>
     </button>
@@ -1518,7 +1788,7 @@ function PlanCard({ plan, setPlans, setAccounts }: { plan: Plan; setPlans: React
   function savePlan() {
     if (!canSave) return;
     setPlans((current) => current.map((item) => item.id === plan.id ? { ...item, ...draft } : item));
-    setAccounts((current) => current.map((account) => account.role === "CLIENTE" && account.planId === plan.id ? { ...account, planValue: draft.value, permissions: draft.permissions } : account));
+    setAccounts((current) => current.map((account) => account.role === "CLIENTE" && account.planId === plan.id ? { ...account, planValue: account.planValue ?? draft.value, permissions: draft.permissions } : account));
     setSaved(true);
   }
 
@@ -1611,7 +1881,7 @@ function buildFinancialSummary(clients: Account[], plans: Plan[], payments: Paym
   const expired = clients.filter((client) => client.status === "vencido" || isExpired(client.dueDate)).length;
   const received = payments.filter((payment) => payment.status === "pago").reduce((sum, payment) => sum + payment.value, 0);
   const pending = payments.filter((payment) => ["pendente", "vencido"].includes(payment.status)).reduce((sum, payment) => sum + payment.value, 0);
-  const expected = clients.reduce((sum, client) => sum + planValueFor(plans, client.planId), 0);
+  const expected = clients.reduce((sum, client) => sum + (client.planValue ?? planValueFor(plans, client.planId)), 0);
   return { active, blocked, expired, received, pending, expected };
 }
 function buildEquityCurve(lines: ReturnType<typeof analyzePortfolio>["lines"]) {

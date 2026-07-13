@@ -13,6 +13,12 @@ export type AssetMetrics = {
   dividendYield?: number;
   pl?: number;
   pvp?: number;
+  eps?: number;
+  bookValuePerShare?: number;
+  epsDate?: string;
+  bookValueDate?: string;
+  fundamentalsSource?: string;
+  fundamentalsSourceUrl?: string;
   evEbit?: number;
   evEbitda?: number;
   roe?: number;

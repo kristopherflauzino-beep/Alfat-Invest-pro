@@ -9,10 +9,14 @@ type AppStatePayload = {
   plans: unknown[];
   payments: unknown[];
   portfolio: unknown[];
+  planPriceHistory: unknown[];
+  grahamSettings: Record<string, unknown>;
+  auditLogs: unknown[];
 };
 
-const allClientModules = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "radar", "relatorios", "configuracoes"];
+const allClientModules = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "radar", "relatorios", "graham_valuation", "plano", "configuracoes"];
 const appStateBlobPath = process.env.APP_STATE_BLOB_PATH || "alfatec-invest-pro/app-state.json";
+const defaultGrahamSettings = { defaultY: 5.5, minGrowth: 0, maxGrowth: 20, scoreWeight: 10, enabled: true, clientsCanEditGrowth: true, clientsCanEditY: false };
 
 const defaultState: AppStatePayload = {
   accounts: [
@@ -41,6 +45,7 @@ const defaultState: AppStatePayload = {
       createdAt: new Date().toISOString().slice(0, 10),
       dueDate: "2026-07-20",
       notes: "Cliente preservado do cadastro existente.",
+      planStartedAt: new Date().toISOString().slice(0, 10),
       permissions: allClientModules
     }
   ],
@@ -50,7 +55,10 @@ const defaultState: AppStatePayload = {
     { id: "anual", name: "Anual", value: 199.9, durationDays: 365, status: "ativo", permissions: allClientModules }
   ],
   payments: [],
-  portfolio: []
+  portfolio: [],
+  planPriceHistory: [],
+  grahamSettings: defaultGrahamSettings,
+  auditLogs: []
 };
 
 function findEnvBySuffix(suffix: string, validator: (value: string) => boolean = (value) => value.trim() !== "") {
@@ -99,12 +107,36 @@ function normalizeState(value: unknown): AppStatePayload {
     accounts: mergeDefaultAccounts(Array.isArray(input.accounts) ? input.accounts : []),
     plans: Array.isArray(input.plans) && input.plans.length > 0 ? input.plans : defaultState.plans,
     payments: Array.isArray(input.payments) ? input.payments : [],
-    portfolio: Array.isArray(input.portfolio) ? input.portfolio : []
+    portfolio: Array.isArray(input.portfolio) ? input.portfolio : [],
+    planPriceHistory: Array.isArray(input.planPriceHistory) ? input.planPriceHistory : [],
+    grahamSettings: input.grahamSettings && typeof input.grahamSettings === "object" ? { ...defaultGrahamSettings, ...input.grahamSettings } : defaultGrahamSettings,
+    auditLogs: Array.isArray(input.auditLogs) ? input.auditLogs : []
   };
 }
 
 function statesDiffer(a: unknown, b: unknown) {
   return JSON.stringify(a) !== JSON.stringify(b);
+}
+
+
+function requestOriginAllowed(request: Request) {
+  const origin = request.headers.get("origin");
+  if (!origin) return true;
+  try {
+    const requestUrl = new URL(request.url);
+    const originUrl = new URL(origin);
+    const isSameHost = originUrl.host === requestUrl.host;
+    const isLocalhost = ["localhost", "127.0.0.1"].includes(originUrl.hostname);
+    const isVercel = originUrl.hostname.endsWith(".vercel.app");
+    return isSameHost || (process.env.NODE_ENV !== "production" && isLocalhost) || isVercel;
+  } catch {
+    return false;
+  }
+}
+
+function requestTooLarge(request: Request) {
+  const contentLength = Number(request.headers.get("content-length") ?? 0);
+  return Number.isFinite(contentLength) && contentLength > 1_000_000;
 }
 
 function storageProvider() {
@@ -207,6 +239,8 @@ export async function GET() {
 
 export async function PUT(request: Request) {
   if (storageProvider() === "not-configured") return storageNotConfiguredResponse();
+  if (!requestOriginAllowed(request)) return NextResponse.json({ error: "Origem da solicitação não autorizada." }, { status: 403 });
+  if (requestTooLarge(request)) return NextResponse.json({ error: "Solicitação muito grande." }, { status: 413 });
 
   try {
     const body = normalizeState(await request.json());
