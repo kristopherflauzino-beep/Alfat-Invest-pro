@@ -147,25 +147,25 @@ const clientModules: Array<{ id: ClientModuleId; label: string; icon: React.Comp
   { id: "comparador", label: "Comparador", icon: LineChartIcon },
   { id: "carteira", label: "Minha Carteira", icon: WalletCards },
   { id: "radar", label: "Radar IA", icon: BrainCircuit },
-  { id: "relatorios", label: "RelatÃƒÂ³rios", icon: FileSpreadsheet },
-  { id: "configuracoes", label: "ConfiguraÃƒÂ§ÃƒÂµes", icon: Settings }
+  { id: "relatorios", label: "Relatórios", icon: FileSpreadsheet },
+  { id: "configuracoes", label: "Configurações", icon: Settings }
 ];
 const adminModules: Array<{ id: AdminModuleId; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: "admin-dashboard", label: "Dashboard Admin", icon: Gauge },
   { id: "clientes", label: "Clientes", icon: Users },
   { id: "planos", label: "Planos", icon: ShieldCheck },
   { id: "financeiro", label: "Financeiro", icon: CircleDollarSign },
-  { id: "admin-relatorios", label: "RelatÃƒÂ³rios Admin", icon: FileSpreadsheet },
-  { id: "configuracoes", label: "ConfiguraÃƒÂ§ÃƒÂµes", icon: Settings }
+  { id: "admin-relatorios", label: "Relatórios Admin", icon: FileSpreadsheet },
+  { id: "configuracoes", label: "Configurações", icon: Settings }
 ];
 const ranges: Array<{ id: RangeId; label: string; points: number }> = [
   { id: "1D", label: "1 Dia", points: 2 },
   { id: "5D", label: "5 Dias", points: 6 },
-  { id: "1M", label: "1 MÃƒÂªs", points: 23 },
+  { id: "1M", label: "1 Mês", points: 23 },
   { id: "6M", label: "6 Meses", points: 127 },
   { id: "1A", label: "1 Ano", points: 253 },
   { id: "5A", label: "5 Anos", points: 253 },
-  { id: "MAX", label: "MÃƒÂ¡ximo", points: 9999 }
+  { id: "MAX", label: "Máximo", points: 9999 }
 ];
 const defaultPlans: Plan[] = [
   { id: "semanal", name: "Semanal", value: 49.9, durationDays: 7, status: "ativo", permissions: allClientModules },
@@ -336,10 +336,10 @@ export default function AlfatecInvestPro() {
   const returnB = performance(rangeHistory(assetB, range));
   const allowedClientModules = currentUser?.role === "CLIENTE" ? clientModules.filter((item) => currentUser.permissions.includes(item.id)) : clientModules;
   const adminNavigationModules = useMemo(() => [
-    ...clientModules.map((item) => ({ ...item, group: "ÃƒÂrea do cliente" })),
+    ...clientModules.map((item) => ({ ...item, group: "Área do cliente" })),
     ...adminModules
       .filter((item) => !allClientModules.includes(item.id as ClientModuleId))
-      .map((item) => ({ ...item, group: "AdministraÃƒÂ§ÃƒÂ£o" }))
+      .map((item) => ({ ...item, group: "Administração" }))
   ], []);
 
   useEffect(() => {
@@ -391,7 +391,7 @@ export default function AlfatecInvestPro() {
     try {
       const response = await fetch("/api/quotes/market?ticker=" + encodeURIComponent(clean) + "&range=1y&interval=1d");
       const data = await response.json();
-      if (!response.ok) throw new Error(data?.error ?? "Dado indispon?vel");
+      if (!response.ok) throw new Error(data?.error ?? "Dado indisponível");
       const previous = assets.find((item) => item.ticker === clean);
       const asset = quoteToAsset(data as ExternalQuote, previous);
       setExtraAssets((current) => [asset, ...current.filter((item) => item.ticker !== asset.ticker)]);
@@ -402,8 +402,8 @@ export default function AlfatecInvestPro() {
       return asset;
     } catch (error) {
       const cached = window.localStorage.getItem("alfatec-quote-" + clean);
-      if (cached) { const asset = JSON.parse(cached) as Asset; setExtraAssets((current) => [asset, ...current.filter((item) => item.ticker !== asset.ticker)]); if (!options.silent) { setMarketQuoteStatus("error"); setMarketQuoteMessage("Fonte indispon?vel. ?ltimo dado dispon?vel em cache."); } return asset; }
-      if (!options.silent) { setMarketQuoteStatus("error"); setMarketQuoteMessage(error instanceof Error ? error.message : "Dado indispon?vel"); }
+      if (cached) { const asset = JSON.parse(cached) as Asset; setExtraAssets((current) => [asset, ...current.filter((item) => item.ticker !== asset.ticker)]); if (!options.silent) { setMarketQuoteStatus("error"); setMarketQuoteMessage("Fonte indisponível. Último dado disponível em cache."); } return asset; }
+      if (!options.silent) { setMarketQuoteStatus("error"); setMarketQuoteMessage(error instanceof Error ? error.message : "Dado indisponível"); }
       return null;
     }
   }
@@ -434,13 +434,13 @@ export default function AlfatecInvestPro() {
     setLoginError("");
     const cleanUser = loginUser.trim().toLowerCase();
     if (!cleanUser || !loginPassword) {
-      setLoginError("Informe usuÃƒÂ¡rio/e-mail e senha.");
+      setLoginError("Informe usuário/e-mail e senha.");
       return;
     }
     const hash = await sha256(loginPassword);
     const found = accounts.find((account) => (account.username.toLowerCase() === cleanUser || account.email.toLowerCase() === cleanUser) && account.passwordHash === hash);
     if (!found) {
-      setLoginError("Login invÃƒÂ¡lido. Verifique usuÃƒÂ¡rio/e-mail e senha.");
+      setLoginError("Login inválido. Verifique usuário/e-mail e senha.");
       return;
     }
     if (found.role === "CLIENTE" && (found.status === "bloqueado" || found.status === "vencido" || isExpired(found.dueDate))) {
@@ -483,7 +483,7 @@ export default function AlfatecInvestPro() {
     const ticker = normalizeTicker(String(formData.get("ticker") ?? ""));
     const quantity = Number(formData.get("quantity") ?? 0);
     const averagePrice = Number(formData.get("averagePrice") ?? 0);
-    const broker = String(formData.get("broker") ?? "").trim() || "NÃƒÂ£o informada";
+    const broker = String(formData.get("broker") ?? "").trim() || "Não informada";
     const purchaseDate = String(formData.get("purchaseDate") ?? "") || todayIso();
     if (!ticker || quantity <= 0 || averagePrice <= 0) return;
     const asset = resolveAssetFromSearch(ticker);
@@ -560,7 +560,7 @@ export default function AlfatecInvestPro() {
     const next = String(formData.get("newPassword") ?? "");
     const confirm = String(formData.get("confirmPassword") ?? "");
     if (next.length < 6 || next !== confirm) {
-      alert("A nova senha deve ter ao menos 6 caracteres e a confirmaÃƒÂ§ÃƒÂ£o deve ser igual.");
+      alert("A nova senha deve ter ao menos 6 caracteres e a confirmação deve ser igual.");
       return;
     }
     const currentHash = await sha256(current);
@@ -577,7 +577,7 @@ export default function AlfatecInvestPro() {
 
   function exportAdminReport() {
     const lines = [
-      "ALFATEC INVEST PRO - RELATÃƒâ€œRIO ADMIN",
+      "ALFATEC INVEST PRO - RELATÓRIO ADMIN",
       `Clientes cadastrados: ${clients.length}`,
       `Clientes ativos: ${financial.active}`,
       `Clientes bloqueados: ${financial.blocked}`,
@@ -609,8 +609,8 @@ export default function AlfatecInvestPro() {
   }
 
   const dashboardCards = [
-    { label: "PatrimÃƒÂ´nio total", value: money.format(portfolioAnalysis.totalEquity), icon: WalletCards, tone: "teal" },
-    { label: "Rentabilidade diÃƒÂ¡ria", value: pct(portfolioAnalysis.lines.reduce((s, l) => s + l.asset.changeDay * l.weight / 100, 0)), icon: TrendingUp, tone: "green" },
+    { label: "Patrimônio total", value: money.format(portfolioAnalysis.totalEquity), icon: WalletCards, tone: "teal" },
+    { label: "Rentabilidade diária", value: pct(portfolioAnalysis.lines.reduce((s, l) => s + l.asset.changeDay * l.weight / 100, 0)), icon: TrendingUp, tone: "green" },
     { label: "Rentabilidade mensal", value: pct(portfolioAnalysis.lines.reduce((s, l) => s + l.asset.changeMonth * l.weight / 100, 0)), icon: BarChart3, tone: "blue" },
     { label: "Rentabilidade anual", value: pct(portfolioAnalysis.profitability), icon: LineChartIcon, tone: portfolioAnalysis.profitability >= 0 ? "green" : "red" },
     { label: "Dividendos previstos", value: money.format(portfolioAnalysis.projectedDividendsYear), icon: PieChartIcon, tone: "amber" },
@@ -631,10 +631,10 @@ export default function AlfatecInvestPro() {
     return (
       <Shell darkMode={darkMode} setDarkMode={setDarkMode} logout={logout} user={currentUser} modules={[]} activeId="" onMenu={() => undefined}>
         <div className="mx-auto max-w-3xl py-16">
-          <PremiumCard title="Acesso bloqueado" description="Sua conta nÃƒÂ£o possui permissÃƒÂ£o ativa para acessar a plataforma." icon={Lock}>
+          <PremiumCard title="Acesso bloqueado" description="Sua conta não possui permissão ativa para acessar a plataforma." icon={Lock}>
             <div className="rounded-3xl bg-red-500/10 p-6 text-red-500">
-              <p className="text-xl font-black">Seu acesso estÃƒÂ¡ temporariamente bloqueado. Entre em contato com o administrador.</p>
-              <p className="mt-2 text-sm">Status atual: {currentUser.status}. Vencimento: {currentUser.dueDate ?? "nÃƒÂ£o informado"}.</p>
+              <p className="text-xl font-black">Seu acesso está temporariamente bloqueado. Entre em contato com o administrador.</p>
+              <p className="mt-2 text-sm">Status atual: {currentUser.status}. Vencimento: {currentUser.dueDate ?? "não informado"}.</p>
             </div>
             <button onClick={logout} className="mt-5 rounded-2xl bg-slate-950 px-5 py-3 font-bold text-white dark:bg-white dark:text-slate-950">Sair da conta</button>
           </PremiumCard>
@@ -647,7 +647,7 @@ export default function AlfatecInvestPro() {
     return (
       <Shell darkMode={darkMode} setDarkMode={setDarkMode} logout={logout} user={currentUser} modules={adminNavigationModules} activeId={adminModule} onMenu={handleAdminMenu}>
         {adminModule === "admin-dashboard" && (
-          <Section title="Dashboard Admin" subtitle="Controle geral de clientes, planos, bloqueios e receita." eyebrow="AdministraÃƒÂ§ÃƒÂ£o">
+          <Section title="Dashboard Admin" subtitle="Controle geral de clientes, planos, bloqueios e receita." eyebrow="Administração">
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
               <MetricCard label="Clientes cadastrados" value={String(clients.length)} icon={Users} tone="blue" />
               <MetricCard label="Clientes ativos" value={String(financial.active)} icon={CheckCircle2} tone="green" />
@@ -658,9 +658,9 @@ export default function AlfatecInvestPro() {
               <PremiumCard title="Receita por status" description="Pagamentos registrados manualmente pelo administrador." icon={BarChart3}>
                 <ChartRevenue payments={payments} />
               </PremiumCard>
-              <PremiumCard title="Resumo operacional" description="SituaÃƒÂ§ÃƒÂ£o atual da base de clientes." icon={ShieldCheck}>
+              <PremiumCard title="Resumo operacional" description="Situação atual da base de clientes." icon={ShieldCheck}>
                 <MiniList data={[{ name: "Ativos", value: financial.active }, { name: "Bloqueados", value: financial.blocked }, { name: "Vencidos", value: financial.expired }]} total={Math.max(clients.length, 1)} />
-                <div className="mt-5 rounded-3xl bg-slate-50 p-4 text-sm dark:bg-white/5">O administrador controla clientes, planos, pagamentos e permissÃƒÂµes. Clientes bloqueados ou vencidos mantÃƒÂªm dados salvos, mas nÃƒÂ£o acessam a plataforma.</div>
+                <div className="mt-5 rounded-3xl bg-slate-50 p-4 text-sm dark:bg-white/5">O administrador controla clientes, planos, pagamentos e permissões. Clientes bloqueados ou vencidos mantêm dados salvos, mas não acessam a plataforma.</div>
               </PremiumCard>
             </div>
           </Section>
@@ -672,16 +672,16 @@ export default function AlfatecInvestPro() {
               <PremiumCard title="Cadastrar novo cliente" description="Defina plano, senha inicial e vencimento." icon={UserCog}>
                 <form onSubmit={addClient} className="grid gap-3">
                   <Input name="name" label="Nome" placeholder="Nome do cliente" required />
-                  <Input name="email" type="email" label="E-mail / usuÃƒÂ¡rio" placeholder="cliente@email.com" required />
+                  <Input name="email" type="email" label="E-mail / usuário" placeholder="cliente@email.com" required />
                   <Input name="phone" label="Telefone" placeholder="(00) 00000-0000" />
                   <Input name="password" label="Senha inicial" placeholder="Senha inicial" defaultValue="123456" required />
                   <Select name="planId" label="Plano" defaultValue="mensal">{plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} - {money.format(plan.value)}</option>)}</Select>
                   <Input name="dueDate" type="date" label="Vencimento" />
-                  <Input name="notes" label="ObservaÃƒÂ§ÃƒÂµes" placeholder="ObservaÃƒÂ§ÃƒÂµes internas" />
+                  <Input name="notes" label="Observações" placeholder="Observações internas" />
                   <button className="rounded-2xl bg-teal-500 px-4 py-3 font-bold text-white"><Plus className="mr-2 inline h-4 w-4" />Cadastrar cliente</button>
                 </form>
               </PremiumCard>
-              <PremiumCard title="Lista de clientes" description="Status, vencimento, plano e aÃƒÂ§ÃƒÂµes rÃƒÂ¡pidas." icon={Users}>
+              <PremiumCard title="Lista de clientes" description="Status, vencimento, plano e ações rápidas." icon={Users}>
                 <div className="space-y-3">
                   {clients.length === 0 && <p className="text-sm text-slate-500">Nenhum cliente cadastrado ainda.</p>}
                   {clients.map((client) => {
@@ -691,8 +691,8 @@ export default function AlfatecInvestPro() {
                         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                           <div>
                             <h3 className="font-black">{client.name}</h3>
-                            <p className="text-sm text-slate-500">{client.email} Ã¢â‚¬Â¢ {client.phone || "sem telefone"}</p>
-                            <p className="mt-1 text-xs text-slate-400">Plano: {plan?.name ?? "-"} Ã¢â‚¬Â¢ Vencimento: {client.dueDate ?? "-"}</p>
+                            <p className="text-sm text-slate-500">{client.email} • {client.phone || "sem telefone"}</p>
+                            <p className="mt-1 text-xs text-slate-400">Plano: {plan?.name ?? "-"} • Vencimento: {client.dueDate ?? "-"}</p>
                           </div>
                           <StatusPill status={client.status} />
                         </div>
@@ -704,7 +704,7 @@ export default function AlfatecInvestPro() {
                           <button onClick={() => updateClient(client.id, { status: client.status === "bloqueado" ? "ativo" : "bloqueado" })} className={cls("rounded-2xl px-3 py-2 text-sm font-bold", client.status === "bloqueado" ? "bg-emerald-500 text-white" : "bg-red-500 text-white")}>{client.status === "bloqueado" ? <Unlock className="mr-1 inline h-4 w-4" /> : <Lock className="mr-1 inline h-4 w-4" />}{client.status === "bloqueado" ? "Desbloquear" : "Bloquear"}</button>
                           <button onClick={() => setAccounts((current) => current.filter((account) => account.id !== client.id))} className="rounded-2xl bg-slate-100 px-3 py-2 text-sm font-bold text-red-500 dark:bg-white/10"><Trash2 className="mr-1 inline h-4 w-4" />Excluir</button>
                         </div>
-                        <button onClick={() => setSelectedClientId(selectedClientId === client.id ? null : client.id)} className="mt-3 text-sm font-bold text-teal-500">{selectedClientId === client.id ? "Ocultar permissÃƒÂµes" : "Editar permissÃƒÂµes"}</button>
+                        <button onClick={() => setSelectedClientId(selectedClientId === client.id ? null : client.id)} className="mt-3 text-sm font-bold text-teal-500">{selectedClientId === client.id ? "Ocultar permissões" : "Editar permissões"}</button>
                         {selectedClientId === client.id && <PermissionsEditor client={client} updateClient={updateClient} />}
                       </div>
                     );
@@ -716,7 +716,7 @@ export default function AlfatecInvestPro() {
         )}
 
         {adminModule === "planos" && (
-          <Section title="Planos" subtitle="Configure valores, duraÃƒÂ§ÃƒÂ£o, status e permissÃƒÂµes." eyebrow="LiberaÃƒÂ§ÃƒÂ£o comercial">
+          <Section title="Planos" subtitle="Configure valores, duração, status e permissões." eyebrow="Liberação comercial">
             <div className="grid gap-6 lg:grid-cols-3">
               {plans.map((plan) => <PlanCard key={plan.id} plan={plan} setPlans={setPlans} />)}
             </div>
@@ -724,7 +724,7 @@ export default function AlfatecInvestPro() {
         )}
 
         {adminModule === "financeiro" && (
-          <Section title="Financeiro" subtitle="Recebimentos, pendÃƒÂªncias, vencimentos e histÃƒÂ³rico." eyebrow="AdministraÃƒÂ§ÃƒÂ£o financeira">
+          <Section title="Financeiro" subtitle="Recebimentos, pendências, vencimentos e histórico." eyebrow="Administração financeira">
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
               <MetricCard label="Clientes ativos" value={String(financial.active)} icon={CheckCircle2} tone="green" />
               <MetricCard label="Clientes vencidos" value={String(financial.expired)} icon={AlertTriangle} tone="amber" />
@@ -743,7 +743,7 @@ export default function AlfatecInvestPro() {
                   <button className="rounded-2xl bg-teal-500 px-4 py-3 font-bold text-white">Registrar pagamento</button>
                 </form>
               </PremiumCard>
-              <PremiumCard title="HistÃƒÂ³rico de pagamentos" description="Lista com status, vencimento e valor." icon={FileSpreadsheet}>
+              <PremiumCard title="Histórico de pagamentos" description="Lista com status, vencimento e valor." icon={FileSpreadsheet}>
                 <div className="mb-5 h-64"><ChartRevenue payments={payments} /></div>
                 <div className="space-y-2">
                   {payments.map((payment) => {
@@ -759,9 +759,9 @@ export default function AlfatecInvestPro() {
         )}
 
         {adminModule === "admin-relatorios" && (
-          <Section title="RelatÃƒÂ³rios Admin" subtitle="ExportaÃƒÂ§ÃƒÂ£o de clientes, planos, status e financeiro." eyebrow="RelatÃƒÂ³rios">
-            <PremiumCard title="RelatÃƒÂ³rio administrativo" description="Gere um arquivo TXT com o resumo do sistema." icon={Download}>
-              <button onClick={exportAdminReport} className="rounded-2xl bg-slate-950 px-5 py-3 font-bold text-white dark:bg-white dark:text-slate-950"><Download className="mr-2 inline h-4 w-4" />Exportar relatÃƒÂ³rio admin</button>
+          <Section title="Relatórios Admin" subtitle="Exportação de clientes, planos, status e financeiro." eyebrow="Relatórios">
+            <PremiumCard title="Relatório administrativo" description="Gere um arquivo TXT com o resumo do sistema." icon={Download}>
+              <button onClick={exportAdminReport} className="rounded-2xl bg-slate-950 px-5 py-3 font-bold text-white dark:bg-white dark:text-slate-950"><Download className="mr-2 inline h-4 w-4" />Exportar relatório admin</button>
               <button onClick={() => window.print()} className="ml-3 rounded-2xl bg-teal-500 px-5 py-3 font-bold text-white">Imprimir / PDF</button>
             </PremiumCard>
           </Section>
@@ -777,15 +777,15 @@ export default function AlfatecInvestPro() {
       <div className="relative z-20">
         <GlobalSearchBox globalSearch={globalSearch} setGlobalSearch={setGlobalSearch} globalSuggestions={globalSuggestions} selectAsset={selectAsset} searchHistory={searchHistory} assets={assets} />
         {clientModule === "dashboard" && (
-          <Section title="Dashboard executivo" subtitle="VisÃƒÂ£o consolidada da carteira, renda, risco e distribuiÃƒÂ§ÃƒÂ£o." eyebrow="Resumo premium">
+          <Section title="Dashboard executivo" subtitle="Visão consolidada da carteira, renda, risco e distribuição." eyebrow="Resumo premium">
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
               {dashboardCards.map((card) => <MetricCard key={card.label} {...card} />)}
             </div>
             <div className="mt-6 grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-              <PremiumCard title="EvoluÃƒÂ§ÃƒÂ£o do patrimÃƒÂ´nio" description="Linha acumulada com base na carteira do usuÃƒÂ¡rio." icon={LineChartIcon}>
-                <div className="h-80"><ResponsiveContainer width="100%" height="100%"><AreaChart data={buildEquityCurve(portfolioAnalysis.lines)}><defs><linearGradient id="equity" x1="0" x2="0" y1="0" y2="1"><stop offset="5%" stopColor="#14b8a6" stopOpacity={0.45}/><stop offset="95%" stopColor="#14b8a6" stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" opacity={0.18} /><XAxis dataKey="label" hide /><YAxis tickFormatter={(value) => compactMoney.format(Number(value))} width={80} /><Tooltip formatter={(value) => money.format(Number(value))} /><Area type="monotone" dataKey="value" name="PatrimÃƒÂ´nio" stroke="#14b8a6" strokeWidth={3} fill="url(#equity)" /></AreaChart></ResponsiveContainer></div>
+              <PremiumCard title="Evolução do patrimônio" description="Linha acumulada com base na carteira do usuário." icon={LineChartIcon}>
+                <div className="h-80"><ResponsiveContainer width="100%" height="100%"><AreaChart data={buildEquityCurve(portfolioAnalysis.lines)}><defs><linearGradient id="equity" x1="0" x2="0" y1="0" y2="1"><stop offset="5%" stopColor="#14b8a6" stopOpacity={0.45}/><stop offset="95%" stopColor="#14b8a6" stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" opacity={0.18} /><XAxis dataKey="label" hide /><YAxis tickFormatter={(value) => compactMoney.format(Number(value))} width={80} /><Tooltip formatter={(value) => money.format(Number(value))} /><Area type="monotone" dataKey="value" name="Patrimônio" stroke="#14b8a6" strokeWidth={3} fill="url(#equity)" /></AreaChart></ResponsiveContainer></div>
               </PremiumCard>
-              <PremiumCard title="DistribuiÃƒÂ§ÃƒÂ£o por tipo" description="ComposiÃƒÂ§ÃƒÂ£o atual da carteira." icon={PieChartIcon}>
+              <PremiumCard title="Distribuição por tipo" description="Composição atual da carteira." icon={PieChartIcon}>
                 <PieBlock data={portfolioAnalysis.byType} />
               </PremiumCard>
             </div>
@@ -793,16 +793,16 @@ export default function AlfatecInvestPro() {
         )}
 
         {clientModule === "mercado" && (
-          <Section title="Mercado" subtitle="Pesquise aÃƒÂ§ÃƒÂµes, FIIs, ETFs, BDRs e criptomoedas. Se o ticker nÃƒÂ£o existir na base local, o sistema cria um cadastro dinÃƒÂ¢mico para futura consulta." eyebrow="Busca instantÃƒÂ¢nea">
+          <Section title="Mercado" subtitle="Pesquise ações, FIIs, ETFs, BDRs e criptomoedas. Se o ticker não existir na base local, o sistema cria um cadastro dinâmico para futura consulta." eyebrow="Busca instantânea">
             <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
               <PremiumCard title="Pesquisar ativos" description="Filtro por ticker, nome, setor, segmento e tipo." icon={Search}>
                 <div className="mb-4 flex flex-col gap-3 lg:flex-row">
-                  <div className="relative flex-1"><Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" /><input value={marketSearch} onChange={(e) => setMarketSearch(e.target.value)} placeholder="Ex.: GARE11, PETR4, BTC, tecnologia, logÃƒÂ­stica..." className="h-12 w-full rounded-2xl border border-slate-200 bg-white pl-12 pr-4 outline-none focus:border-teal-400 dark:border-white/10 dark:bg-white/5" /></div>
+                  <div className="relative flex-1"><Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" /><input value={marketSearch} onChange={(e) => setMarketSearch(e.target.value)} placeholder="Ex.: GARE11, PETR4, BTC, tecnologia, logística..." className="h-12 w-full rounded-2xl border border-slate-200 bg-white pl-12 pr-4 outline-none focus:border-teal-400 dark:border-white/10 dark:bg-white/5" /></div>
                   <select value={marketType} onChange={(e) => setMarketType(e.target.value as AssetType | "TODOS")} className="h-12 rounded-2xl border border-slate-200 bg-white px-4 dark:border-white/10 dark:bg-slate-950">{assetTypeOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select><button type="button" onClick={() => void refreshVisibleMarket()} disabled={refreshingMarket} className="h-12 rounded-2xl bg-teal-500 px-4 font-bold text-white disabled:cursor-wait disabled:opacity-70"><RefreshCw className={cls("mr-2 inline h-4 w-4", refreshingMarket && "animate-spin")} />{refreshingMarket ? "Atualizando..." : "Atualizar dados"}</button>
                 </div>
                 <div className="grid gap-3 lg:grid-cols-2">
                   {marketResults.slice(0, 18).map((asset) => <AssetCard key={asset.ticker} asset={asset} favorites={favorites} onSelect={() => selectAsset(asset)} onFavorite={() => setFavorites((current) => current.includes(asset.ticker) ? current.filter((ticker) => ticker !== asset.ticker) : [asset.ticker, ...current])} />)}
-                  {marketQuoteMessage && <div className={cls("rounded-3xl border p-5 text-sm font-bold", marketQuoteStatus === "error" ? "border-amber-400/40 bg-amber-500/10 text-amber-600 dark:text-amber-300" : "border-cyan-400/40 bg-cyan-500/10 text-cyan-700 dark:text-cyan-200")}>{marketQuoteStatus === "loading" ? "Consultando cotaÃ§Ã£o externa..." : marketQuoteMessage}</div>}
+                  {marketQuoteMessage && <div className={cls("rounded-3xl border p-5 text-sm font-bold", marketQuoteStatus === "error" ? "border-amber-400/40 bg-amber-500/10 text-amber-600 dark:text-amber-300" : "border-cyan-400/40 bg-cyan-500/10 text-cyan-700 dark:text-cyan-200")}>{marketQuoteStatus === "loading" ? "Consultando cotação externa..." : marketQuoteMessage}</div>}
                 </div>
               </PremiumCard>
               <AssetPanel asset={selectedAsset} favorites={favorites} setFavorites={setFavorites} onAddToPortfolio={(asset) => setPortfolio((current) => [{ id: crypto.randomUUID(), ticker: asset.ticker, quantity: 1, averagePrice: asset.price, broker: "Manual", purchaseDate: todayIso() }, ...current])} />
@@ -811,16 +811,16 @@ export default function AlfatecInvestPro() {
         )}
 
         {clientModule === "oportunidades" && (
-          <Section title="Oportunidades" subtitle="Ranking automÃƒÂ¡tico por score, dividendos, qualidade, valor e crescimento." eyebrow="Radar de oportunidades">
+          <Section title="Oportunidades" subtitle="Ranking automático por score, dividendos, qualidade, valor e crescimento." eyebrow="Radar de oportunidades">
             <div className="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
-              <PremiumCard title="Filtros rÃƒÂ¡pidos" description="Use para filtrar e encontrar oportunidades por tipo de mercado." icon={Search}>
+              <PremiumCard title="Filtros rápidos" description="Use para filtrar e encontrar oportunidades por tipo de mercado." icon={Search}>
                 <div className="mb-4 flex flex-col gap-3 lg:flex-row">
-                  <div className="relative flex-1"><Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" /><input value={marketSearch} onChange={(e) => setMarketSearch(e.target.value)} placeholder="Ex.: GARE11, dividendos, logÃƒÂ­stica, banco..." className="h-12 w-full rounded-2xl border border-slate-200 bg-white pl-12 pr-4 outline-none focus:border-teal-400 dark:border-white/10 dark:bg-white/5" /></div>
+                  <div className="relative flex-1"><Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" /><input value={marketSearch} onChange={(e) => setMarketSearch(e.target.value)} placeholder="Ex.: GARE11, dividendos, logística, banco..." className="h-12 w-full rounded-2xl border border-slate-200 bg-white pl-12 pr-4 outline-none focus:border-teal-400 dark:border-white/10 dark:bg-white/5" /></div>
                   <select value={marketType} onChange={(e) => setMarketType(e.target.value as AssetType | "TODOS")} className="h-12 rounded-2xl border border-slate-200 bg-white px-4 dark:border-white/10 dark:bg-slate-950">{assetTypeOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
                 </div>
                 <div className="space-y-3">{marketResults.slice(0, 8).map((asset, index) => <RankingRow key={asset.ticker} asset={{ ...asset, score: calculateAssetScore(asset, weights) }} index={index + 1} onClick={() => selectAsset(asset, "mercado")} />)}</div>
               </PremiumCard>
-              <PremiumCard title="Melhores scores do mercado" description="ClassificaÃƒÂ§ÃƒÂ£o automatizada com critÃƒÂ©rios transparentes. NÃƒÂ£o ÃƒÂ© recomendaÃƒÂ§ÃƒÂ£o personalizada." icon={TrendingUp}>
+              <PremiumCard title="Melhores scores do mercado" description="Classificação automatizada com critérios transparentes. Não é recomendação personalizada." icon={TrendingUp}>
                 <div className="space-y-3">{[...assets].map((asset) => ({ ...asset, score: calculateAssetScore(asset, weights) })).sort((a, b) => b.score - a.score).slice(0, 12).map((asset, index) => <RankingRow key={asset.ticker} asset={asset} index={index + 1} onClick={() => selectAsset(asset, "mercado")} />)}</div>
               </PremiumCard>
             </div>
@@ -828,8 +828,8 @@ export default function AlfatecInvestPro() {
         )}
 
         {clientModule === "comparador" && (
-          <Section title="Comparador" subtitle="Compare qualquer combinaÃƒÂ§ÃƒÂ£o: aÃƒÂ§ÃƒÂ£o, FII, ETF, BDR ou cripto." eyebrow="GrÃƒÂ¡fico profissional">
-            <PremiumCard title="Comparar ativos" description="Use as barras de pesquisa para escolher os dois lados da comparaÃƒÂ§ÃƒÂ£o." icon={LineChartIcon}>
+          <Section title="Comparador" subtitle="Compare qualquer combinação: ação, FII, ETF, BDR ou cripto." eyebrow="Gráfico profissional">
+            <PremiumCard title="Comparar ativos" description="Use as barras de pesquisa para escolher os dois lados da comparação." icon={LineChartIcon}>
               <div className="grid gap-4 lg:grid-cols-2">
                 <SearchBox label="Pesquisar Ativo A" value={searchA} onChange={setSearchA} assets={assets} onSelect={(asset) => { setAssetA(asset); setSearchA(asset.ticker); }} />
                 <SearchBox label="Pesquisar Ativo B" value={searchB} onChange={setSearchB} assets={assets} onSelect={(asset) => { setAssetB(asset); setSearchB(asset.ticker); }} />
@@ -843,32 +843,32 @@ export default function AlfatecInvestPro() {
         )}
 
         {clientModule === "carteira" && (
-          <Section title="Minha Carteira" subtitle="Cadastre ativos e acompanhe lucro, prejuÃƒÂ­zo, dividendos e concentraÃƒÂ§ÃƒÂ£o." eyebrow="Controle do usuÃƒÂ¡rio">
+          <Section title="Minha Carteira" subtitle="Cadastre ativos e acompanhe lucro, prejuízo, dividendos e concentração." eyebrow="Controle do usuário">
             <div className="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
-              <PremiumCard title="Adicionar ativo" description="Ticker, quantidade, preÃƒÂ§o mÃƒÂ©dio, corretora e data." icon={Plus}>
-                <form onSubmit={addPortfolioPosition} className="grid gap-3"><Input name="ticker" label="Ticker" placeholder="GARE11" required /><Input name="quantity" type="number" step="0.01" label="Quantidade" required /><Input name="averagePrice" type="number" step="0.01" label="PreÃƒÂ§o mÃƒÂ©dio" required /><Input name="broker" label="Corretora" placeholder="XP, Rico, BTG..." /><Input name="purchaseDate" type="date" label="Data da compra" /><button className="rounded-2xl bg-teal-500 px-4 py-3 font-bold text-white">Adicionar ÃƒÂ  carteira</button></form>
+              <PremiumCard title="Adicionar ativo" description="Ticker, quantidade, preço médio, corretora e data." icon={Plus}>
+                <form onSubmit={addPortfolioPosition} className="grid gap-3"><Input name="ticker" label="Ticker" placeholder="GARE11" required /><Input name="quantity" type="number" step="0.01" label="Quantidade" required /><Input name="averagePrice" type="number" step="0.01" label="Preço médio" required /><Input name="broker" label="Corretora" placeholder="XP, Rico, BTG..." /><Input name="purchaseDate" type="date" label="Data da compra" /><button className="rounded-2xl bg-teal-500 px-4 py-3 font-bold text-white">Adicionar à carteira</button></form>
               </PremiumCard>
-              <PremiumCard title="PosiÃƒÂ§ÃƒÂµes" description="AnÃƒÂ¡lise automÃƒÂ¡tica das posiÃƒÂ§ÃƒÂµes cadastradas." icon={WalletCards}>
-                <div className="overflow-x-auto"><table className="min-w-full text-sm"><thead><tr className="text-left text-slate-500"><th className="p-3">Ativo</th><th className="p-3">Qtd.</th><th className="p-3">PreÃƒÂ§o mÃƒÂ©dio</th><th className="p-3">Atual</th><th className="p-3">Lucro/PrejuÃƒÂ­zo</th><th className="p-3">Peso</th><th className="p-3"></th></tr></thead><tbody>{portfolioAnalysis.lines.map((line) => <tr key={line.id} className="border-t border-slate-100 dark:border-white/10"><td className="p-3 font-black">{line.ticker}<p className="text-xs font-normal text-slate-500">{typeLabels[line.asset.type]}</p></td><td className="p-3">{line.quantity}</td><td className="p-3">{money.format(line.averagePrice)}</td><td className="p-3">{money.format(line.asset.price)}</td><td className={cls("p-3 font-black", line.profit >= 0 ? "text-emerald-500" : "text-red-500")}>{money.format(line.profit)}<p className="text-xs">{pct(line.profitability)}</p></td><td className="p-3">{pct(line.weight)}</td><td className="p-3"><button onClick={() => setPortfolio((current) => current.filter((item) => item.id !== line.id))} className="rounded-xl bg-red-500/10 p-2 text-red-500"><Trash2 className="h-4 w-4" /></button></td></tr>)}</tbody></table></div>
+              <PremiumCard title="Posições" description="Análise automática das posições cadastradas." icon={WalletCards}>
+                <div className="overflow-x-auto"><table className="min-w-full text-sm"><thead><tr className="text-left text-slate-500"><th className="p-3">Ativo</th><th className="p-3">Qtd.</th><th className="p-3">Preço médio</th><th className="p-3">Atual</th><th className="p-3">Lucro/Prejuízo</th><th className="p-3">Peso</th><th className="p-3"></th></tr></thead><tbody>{portfolioAnalysis.lines.map((line) => <tr key={line.id} className="border-t border-slate-100 dark:border-white/10"><td className="p-3 font-black">{line.ticker}<p className="text-xs font-normal text-slate-500">{typeLabels[line.asset.type]}</p></td><td className="p-3">{line.quantity}</td><td className="p-3">{money.format(line.averagePrice)}</td><td className="p-3">{money.format(line.asset.price)}</td><td className={cls("p-3 font-black", line.profit >= 0 ? "text-emerald-500" : "text-red-500")}>{money.format(line.profit)}<p className="text-xs">{pct(line.profitability)}</p></td><td className="p-3">{pct(line.weight)}</td><td className="p-3"><button onClick={() => setPortfolio((current) => current.filter((item) => item.id !== line.id))} className="rounded-xl bg-red-500/10 p-2 text-red-500"><Trash2 className="h-4 w-4" /></button></td></tr>)}</tbody></table></div>
               </PremiumCard>
             </div>
-            <div className="mt-6 grid gap-6 lg:grid-cols-2"><PremiumCard title="AnÃƒÂ¡lise IA da carteira" description="DiversificaÃƒÂ§ÃƒÂ£o, concentraÃƒÂ§ÃƒÂ£o, risco e dividendos." icon={BrainCircuit}><ul className="space-y-2">{portfolioAnalysis.aiSummary.map((item) => <li key={item} className="flex gap-2 text-sm"><ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-teal-500" />{item}</li>)}</ul></PremiumCard><PremiumCard title="Alertas automatizados" description="CondiÃƒÂ§ÃƒÂµes de risco e concentraÃƒÂ§ÃƒÂ£o." icon={AlertTriangle}><ul className="space-y-2">{portfolioAnalysis.alerts.map((item) => <li key={item} className="flex gap-2 text-sm"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />{item}</li>)}</ul></PremiumCard></div>
+            <div className="mt-6 grid gap-6 lg:grid-cols-2"><PremiumCard title="Análise IA da carteira" description="Diversificação, concentração, risco e dividendos." icon={BrainCircuit}><ul className="space-y-2">{portfolioAnalysis.aiSummary.map((item) => <li key={item} className="flex gap-2 text-sm"><ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-teal-500" />{item}</li>)}</ul></PremiumCard><PremiumCard title="Alertas automatizados" description="Condições de risco e concentração." icon={AlertTriangle}><ul className="space-y-2">{portfolioAnalysis.alerts.map((item) => <li key={item} className="flex gap-2 text-sm"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />{item}</li>)}</ul></PremiumCard></div>
           </Section>
         )}
 
         {clientModule === "radar" && (
-          <Section title="Radar IA" subtitle="Ranking de oportunidades com score transparente e configurÃƒÂ¡vel." eyebrow="InteligÃƒÂªncia automatizada">
+          <Section title="Radar IA" subtitle="Ranking de oportunidades com score transparente e configurável." eyebrow="Inteligência automatizada">
             <div className="grid gap-6 xl:grid-cols-[0.75fr_1.25fr]">
-              <PremiumCard title="CritÃƒÂ©rios do score" description="Ajuste os pesos da avaliaÃƒÂ§ÃƒÂ£o." icon={Settings}>{Object.entries(weights).map(([key, value]) => <WeightSlider key={key} label={radarLabel(key)} value={value} onChange={(next) => setWeights((current) => ({ ...current, [key]: next }))} />)}</PremiumCard>
-              <PremiumCard title="Ranking geral" description="AÃƒÂ§ÃƒÂµes, FIIs, ETFs, BDRs e criptomoedas." icon={BrainCircuit}><div className="space-y-3">{[...assets].map((asset) => ({ ...asset, score: calculateAssetScore(asset, weights) })).sort((a, b) => b.score - a.score).slice(0, 15).map((asset, index) => <RankingRow key={asset.ticker} asset={asset} index={index + 1} onClick={() => selectAsset(asset, "mercado")} />)}</div></PremiumCard>
+              <PremiumCard title="Critérios do score" description="Ajuste os pesos da avaliação." icon={Settings}>{Object.entries(weights).map(([key, value]) => <WeightSlider key={key} label={radarLabel(key)} value={value} onChange={(next) => setWeights((current) => ({ ...current, [key]: next }))} />)}</PremiumCard>
+              <PremiumCard title="Ranking geral" description="Ações, FIIs, ETFs, BDRs e criptomoedas." icon={BrainCircuit}><div className="space-y-3">{[...assets].map((asset) => ({ ...asset, score: calculateAssetScore(asset, weights) })).sort((a, b) => b.score - a.score).slice(0, 15).map((asset, index) => <RankingRow key={asset.ticker} asset={asset} index={index + 1} onClick={() => selectAsset(asset, "mercado")} />)}</div></PremiumCard>
             </div>
           </Section>
         )}
 
         {clientModule === "relatorios" && (
-          <Section title="RelatÃƒÂ³rios" subtitle="Resumo profissional com carteira, dividendos, setores, alertas e exportaÃƒÂ§ÃƒÂ£o." eyebrow="PDF, Excel e CSV">
-            <PremiumCard title="RelatÃƒÂ³rio da carteira" description="ExportaÃƒÂ§ÃƒÂ£o CSV e impressÃƒÂ£o em PDF pelo navegador." icon={FileSpreadsheet}>
-              <div className="grid gap-4 sm:grid-cols-3"><InfoTile label="PatrimÃƒÂ´nio" value={money.format(portfolioAnalysis.totalEquity)} /><InfoTile label="Lucro/PrejuÃƒÂ­zo" value={money.format(portfolioAnalysis.totalProfit)} /><InfoTile label="Dividendos/ano" value={money.format(portfolioAnalysis.projectedDividendsYear)} /></div>
+          <Section title="Relatórios" subtitle="Resumo profissional com carteira, dividendos, setores, alertas e exportação." eyebrow="PDF, Excel e CSV">
+            <PremiumCard title="Relatório da carteira" description="Exportação CSV e impressão em PDF pelo navegador." icon={FileSpreadsheet}>
+              <div className="grid gap-4 sm:grid-cols-3"><InfoTile label="Patrimônio" value={money.format(portfolioAnalysis.totalEquity)} /><InfoTile label="Lucro/Prejuízo" value={money.format(portfolioAnalysis.totalProfit)} /><InfoTile label="Dividendos/ano" value={money.format(portfolioAnalysis.projectedDividendsYear)} /></div>
               <div className="mt-5 flex flex-wrap gap-3"><button onClick={exportPortfolioCsv} className="rounded-2xl bg-teal-500 px-5 py-3 font-bold text-white"><Download className="mr-2 inline h-4 w-4" />Exportar CSV</button><button onClick={() => window.print()} className="rounded-2xl bg-slate-950 px-5 py-3 font-bold text-white dark:bg-white dark:text-slate-950">Imprimir / PDF</button></div>
             </PremiumCard>
           </Section>
@@ -882,7 +882,7 @@ export default function AlfatecInvestPro() {
 
 function Shell({ darkMode, setDarkMode, logout, user, modules, activeId, onMenu, children }: { darkMode: boolean; setDarkMode: (value: boolean) => void; logout: () => void; user: Account; modules: Array<{ id: string; label: string; icon: React.ComponentType<{ className?: string }>; group?: string }>; activeId: string; onMenu: (id: string) => void; children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const adminGroups = ["ÃƒÂrea do cliente", "AdministraÃƒÂ§ÃƒÂ£o"];
+  const adminGroups = ["Área do cliente", "Administração"];
   const activeModule = modules.find((item) => item.id === activeId);
   const groupedModules = user.role === "ADMIN"
     ? adminGroups.map((group) => ({ group, items: modules.filter((item) => item.group === group) })).filter((item) => item.items.length)
@@ -937,7 +937,7 @@ function Shell({ darkMode, setDarkMode, logout, user, modules, activeId, onMenu,
               <img src="/logo-alfatec.png" alt="Invest Pro" className="h-14 w-14 object-contain" />
               <div className="min-w-0">
                 <h1 className="truncate text-2xl font-black tracking-tight text-slate-950 dark:text-white">INVEST PRO</h1>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.26em] text-cyan-500">AnÃƒÂ¡lise premium</p>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.26em] text-cyan-500">Análise premium</p>
               </div>
             </div>
             <div className="mt-5 rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/[0.04]">
@@ -980,7 +980,7 @@ function Shell({ darkMode, setDarkMode, logout, user, modules, activeId, onMenu,
               <div className="flex min-w-0 items-center gap-3">
                 <button onClick={() => setSidebarOpen(true)} className="rounded-2xl border border-slate-200 bg-white p-3 transition hover:scale-105 dark:border-white/10 dark:bg-white/5 lg:hidden" aria-label="Abrir menu lateral"><Menu className="h-5 w-5" /></button>
                 <div className="min-w-0">
-                  <p className="text-[10px] font-black uppercase tracking-[0.28em] text-cyan-500">{user.role === "ADMIN" ? "Painel administrativo" : "ÃƒÂrea do cliente"}</p>
+                  <p className="text-[10px] font-black uppercase tracking-[0.28em] text-cyan-500">{user.role === "ADMIN" ? "Painel administrativo" : "Área do cliente"}</p>
                   <h2 className="truncate text-lg font-black sm:text-2xl">{activeModule?.label ?? "INVEST PRO"}</h2>
                 </div>
               </div>
@@ -1009,7 +1009,7 @@ function LoginScreen({ darkMode, setDarkMode, loginUser, setLoginUser, loginPass
             <div className="relative z-10 mt-7">
               <p className="text-xs uppercase tracking-[0.35em] text-cyan-300">Acesso seguro</p>
               <h2 className="mt-3 text-3xl font-black text-white">INVEST PRO</h2>
-              <p className="mt-3 text-sm leading-6 text-slate-300">GestÃƒÂ£o de clientes, planos, financeiro e anÃƒÂ¡lise inteligente de investimentos em uma interface profissional.</p>
+              <p className="mt-3 text-sm leading-6 text-slate-300">Gestão de clientes, planos, financeiro e análise inteligente de investimentos em uma interface profissional.</p>
             </div>
           </div>
           <form onSubmit={onSubmit} className="relative p-6 sm:p-8 lg:p-10">
@@ -1024,8 +1024,8 @@ function LoginScreen({ darkMode, setDarkMode, loginUser, setLoginUser, loginPass
               <button type="button" onClick={() => setDarkMode(!darkMode)} className="rounded-2xl border border-slate-200 bg-white p-3 transition hover:scale-105 dark:border-white/10 dark:bg-white/5" aria-label="Alternar tema">{darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}</button>
             </div>
             <label className="mb-4 block">
-              <span className="mb-2 block text-xs font-bold uppercase tracking-[0.2em] text-slate-400">UsuÃƒÂ¡rio ou e-mail</span>
-              <div className="relative"><UserCog className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" /><input value={loginUser} onChange={(e) => setLoginUser(e.target.value)} className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-12 pr-4 outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10 text-slate-950 placeholder:text-slate-400 dark:border-white/10 dark:bg-white/5 dark:text-white dark:placeholder:text-slate-400" placeholder="Digite seu usuÃƒÂ¡rio ou e-mail" autoComplete="username" /></div>
+              <span className="mb-2 block text-xs font-bold uppercase tracking-[0.2em] text-slate-400">Usuário ou e-mail</span>
+              <div className="relative"><UserCog className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" /><input value={loginUser} onChange={(e) => setLoginUser(e.target.value)} className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-12 pr-4 outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10 text-slate-950 placeholder:text-slate-400 dark:border-white/10 dark:bg-white/5 dark:text-white dark:placeholder:text-slate-400" placeholder="Digite seu usuário ou e-mail" autoComplete="username" /></div>
             </label>
             <label className="mb-4 block">
               <span className="mb-2 block text-xs font-bold uppercase tracking-[0.2em] text-slate-400">Senha</span>
@@ -1033,7 +1033,7 @@ function LoginScreen({ darkMode, setDarkMode, loginUser, setLoginUser, loginPass
             </label>
             {loginError && <div className="mb-4 rounded-2xl bg-red-500/10 p-4 text-sm font-semibold text-red-500">{loginError}</div>}
             <button className="h-12 w-full rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 px-5 font-black text-white shadow-glow transition hover:scale-[1.01]">Entrar</button>
-            <p className="mt-5 text-center text-xs text-slate-500 dark:text-slate-400">Acesso protegido por perfil. Clientes bloqueados ou vencidos nÃƒÂ£o acessam os mÃƒÂ³dulos internos.</p>
+            <p className="mt-5 text-center text-xs text-slate-500 dark:text-slate-400">Acesso protegido por perfil. Clientes bloqueados ou vencidos não acessam os módulos internos.</p>
           </form>
         </motion.div>
       </div>
@@ -1042,7 +1042,7 @@ function LoginScreen({ darkMode, setDarkMode, loginUser, setLoginUser, loginPass
 }
 
 function GlobalSearchBox({ globalSearch, setGlobalSearch, globalSuggestions, selectAsset, searchHistory, assets }: { globalSearch: string; setGlobalSearch: (value: string) => void; globalSuggestions: Asset[]; selectAsset: (asset: Asset, module?: ClientModuleId) => void; searchHistory: string[]; assets: Asset[] }) {
-  return <div className="relative mb-6"><Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" /><input value={globalSearch} onChange={(event) => setGlobalSearch(event.target.value)} placeholder="Pesquisar em toda a plataforma: ticker, nome, setor, segmento ou tipo..." className="h-14 w-full rounded-3xl border border-slate-200 bg-white pl-12 pr-12 text-sm outline-none transition focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10 text-slate-950 placeholder:text-slate-400 dark:border-white/10 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-400" />{globalSearch && <button onClick={() => setGlobalSearch("")} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400"><X className="h-4 w-4" /></button>}{globalSearch && <div className="absolute top-16 z-50 w-full overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-premium dark:border-white/10 dark:bg-slate-900"><div className="border-b border-slate-100 p-3 text-xs font-semibold uppercase tracking-[0.2em] text-slate-400 dark:border-white/10">SugestÃƒÂµes instantÃƒÂ¢neas</div>{globalSuggestions.map((asset) => <button key={asset.ticker} onClick={() => { selectAsset(asset); setGlobalSearch(""); }} className="flex w-full items-center justify-between px-4 py-3 text-left transition hover:bg-slate-50 dark:hover:bg-white/5"><span><strong>{asset.ticker}</strong><span className="ml-2 text-sm text-slate-500">{asset.name}</span></span><span className="rounded-full bg-slate-100 px-2 py-1 text-xs dark:bg-white/10">{typeLabels[asset.type]}</span></button>)}<div className="flex flex-wrap gap-2 border-t border-slate-100 p-3 text-xs dark:border-white/10">{searchHistory.length > 0 && <span className="text-slate-400">HistÃƒÂ³rico:</span>}{searchHistory.map((ticker) => <button key={ticker} onClick={() => selectAsset(getAsset(ticker, assets))} className="rounded-full bg-slate-100 px-2 py-1 dark:bg-white/10">{ticker}</button>)}</div></div>}</div>;
+  return <div className="relative mb-6"><Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" /><input value={globalSearch} onChange={(event) => setGlobalSearch(event.target.value)} placeholder="Pesquisar em toda a plataforma: ticker, nome, setor, segmento ou tipo..." className="h-14 w-full rounded-3xl border border-slate-200 bg-white pl-12 pr-12 text-sm outline-none transition focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10 text-slate-950 placeholder:text-slate-400 dark:border-white/10 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-400" />{globalSearch && <button onClick={() => setGlobalSearch("")} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400"><X className="h-4 w-4" /></button>}{globalSearch && <div className="absolute top-16 z-50 w-full overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-premium dark:border-white/10 dark:bg-slate-900"><div className="border-b border-slate-100 p-3 text-xs font-semibold uppercase tracking-[0.2em] text-slate-400 dark:border-white/10">Sugestões instantâneas</div>{globalSuggestions.map((asset) => <button key={asset.ticker} onClick={() => { selectAsset(asset); setGlobalSearch(""); }} className="flex w-full items-center justify-between px-4 py-3 text-left transition hover:bg-slate-50 dark:hover:bg-white/5"><span><strong>{asset.ticker}</strong><span className="ml-2 text-sm text-slate-500">{asset.name}</span></span><span className="rounded-full bg-slate-100 px-2 py-1 text-xs dark:bg-white/10">{typeLabels[asset.type]}</span></button>)}<div className="flex flex-wrap gap-2 border-t border-slate-100 p-3 text-xs dark:border-white/10">{searchHistory.length > 0 && <span className="text-slate-400">Histórico:</span>}{searchHistory.map((ticker) => <button key={ticker} onClick={() => selectAsset(getAsset(ticker, assets))} className="rounded-full bg-slate-100 px-2 py-1 dark:bg-white/10">{ticker}</button>)}</div></div>}</div>;
 }
 
 function Section({ title, subtitle, eyebrow, children }: { title: string; subtitle: string; eyebrow: string; children: React.ReactNode }) {
@@ -1056,11 +1056,11 @@ function MetricCard({ label, value, icon: Icon, tone }: { label: string; value: 
   return <div className="rounded-[1.7rem] border border-slate-200 bg-white p-5 shadow-premium dark:border-white/10 dark:bg-slate-900/80"><div className={cls("mb-4 grid h-11 w-11 place-items-center rounded-2xl bg-gradient-to-br text-white", tones[tone])}><Icon className="h-5 w-5" /></div><p className="text-sm text-slate-500 dark:text-slate-400">{label}</p><p className="mt-1 text-2xl font-black tracking-tight">{value}</p></div>;
 }
 function AssetCard({ asset, favorites, onSelect, onFavorite }: { asset: Asset; favorites: string[]; onSelect: () => void; onFavorite: () => void }) {
-  return <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/5"><div className="flex items-start justify-between gap-3"><button onClick={onSelect} className="text-left"><p className="text-xs text-slate-500 dark:text-slate-300">{typeLabels[asset.type]} â€¢ {asset.segment}</p><h3 className="mt-1 text-xl font-black">{asset.ticker}</h3><p className="text-sm text-slate-500 dark:text-slate-300">{asset.name}</p>{asset.source === "external" && <p className="mt-2 text-xs font-bold text-cyan-600 dark:text-cyan-300">Fonte: Google Finance via provedor externo</p>}</button><button onClick={onFavorite} className="rounded-xl bg-white p-2 dark:bg-white/10"><Star className={cls("h-4 w-4", favorites.includes(asset.ticker) && "fill-amber-400 text-amber-400")} /></button></div><div className="mt-4 grid grid-cols-3 gap-2"><InfoTile label="PreÃ§o" value={money.format(asset.price)} /><InfoTile label="Dia" value={pct(asset.changeDay)} /><InfoTile label="Score" value={`${asset.score}/100`} /></div></div>;
+  return <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/5"><div className="flex items-start justify-between gap-3"><button onClick={onSelect} className="text-left"><p className="text-xs text-slate-500 dark:text-slate-300">{typeLabels[asset.type]} • {asset.segment}</p><h3 className="mt-1 text-xl font-black">{asset.ticker}</h3><p className="text-sm text-slate-500 dark:text-slate-300">{asset.name}</p>{asset.source === "external" && <p className="mt-2 text-xs font-bold text-cyan-600 dark:text-cyan-300">Fonte: Google Finance via provedor externo</p>}</button><button onClick={onFavorite} className="rounded-xl bg-white p-2 dark:bg-white/10"><Star className={cls("h-4 w-4", favorites.includes(asset.ticker) && "fill-amber-400 text-amber-400")} /></button></div><div className="mt-4 grid grid-cols-3 gap-2"><InfoTile label="Preço" value={money.format(asset.price)} /><InfoTile label="Dia" value={pct(asset.changeDay)} /><InfoTile label="Score" value={`${asset.score}/100`} /></div></div>;
 }
 function AssetPanel({ asset, favorites, setFavorites, onAddToPortfolio }: { asset: Asset; favorites: string[]; setFavorites: React.Dispatch<React.SetStateAction<string[]>>; onAddToPortfolio: (asset: Asset) => void }) {
   const isFavorite = favorites.includes(asset.ticker);
-  return <PremiumCard title="PÃƒÂ¡gina do ativo" description="InformaÃƒÂ§ÃƒÂµes, indicadores, IA e fundamentos." icon={ShieldCheck}><div className="rounded-3xl bg-gradient-to-br from-slate-950 to-slate-800 p-5 text-white"><div className="flex items-start justify-between gap-4"><div><p className="text-sm text-cyan-300">{typeLabels[asset.type]} Ã¢â‚¬Â¢ {asset.segment}</p><h3 className="mt-1 text-3xl font-black">{asset.ticker}</h3><p className="text-slate-300">{asset.name}</p></div><button onClick={() => setFavorites((current) => isFavorite ? current.filter((ticker) => ticker !== asset.ticker) : [asset.ticker, ...current])} className="rounded-2xl bg-white/10 p-3 hover:bg-white/20"><Star className={cls("h-5 w-5", isFavorite && "fill-amber-400 text-amber-400")} /></button></div><div className="mt-6 grid grid-cols-3 gap-3"><InfoTile dark label="PreÃƒÂ§o" value={money.format(asset.price)} /><InfoTile dark label="Ano" value={pct(asset.changeYear)} /><InfoTile dark label="Score" value={`${asset.score}/100`} /></div></div><div className="mt-4 grid grid-cols-2 gap-3"><InfoTile label="Mercado" value={asset.market} /><InfoTile label="Setor" value={asset.sector} /><InfoTile label="Liquidez" value={compactMoney.format(asset.liquidity)} /><InfoTile label="Risco" value={asset.risk} /><InfoTile label="Dividend Yield" value={pct(asset.metrics.dividendYield)} /><InfoTile label="P/VP" value={metric(asset.metrics.pvp)} /><InfoTile label="P/L" value={metric(asset.metrics.pl)} /><InfoTile label="ROE" value={pct(asset.metrics.roe)} /></div><div className="mt-4 rounded-3xl border border-slate-200 p-4 dark:border-white/10"><p className="mb-2 text-sm font-black">Resumo IA do ativo</p><p className="text-sm text-slate-600 dark:text-slate-300">{asset.summary}</p><ul className="mt-3 space-y-2">{generateAiNotes(asset).map((note) => <li key={note} className="flex gap-2 text-sm text-slate-600 dark:text-slate-300"><ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-cyan-500" />{note}</li>)}</ul></div>{asset.source === "external" && <p className="mt-3 text-sm font-bold text-cyan-600 dark:text-cyan-300">Fonte: Google Finance via provedor externo</p>}<a href={googleFinanceUrl(asset)} target="_blank" rel="noreferrer" className="mt-4 flex w-full items-center justify-center rounded-2xl border border-slate-200 px-4 py-3 font-bold text-slate-700 transition hover:bg-slate-50 dark:border-white/10 dark:text-slate-100 dark:hover:bg-white/10">Abrir no Google FinanÃ§as</a><button onClick={() => onAddToPortfolio(asset)} className="mt-3 w-full rounded-2xl bg-cyan-500 px-4 py-3 font-bold text-white">Adicionar Ã  carteira</button></PremiumCard>;
+  return <PremiumCard title="Página do ativo" description="Informações, indicadores, IA e fundamentos." icon={ShieldCheck}><div className="rounded-3xl bg-gradient-to-br from-slate-950 to-slate-800 p-5 text-white"><div className="flex items-start justify-between gap-4"><div><p className="text-sm text-cyan-300">{typeLabels[asset.type]} • {asset.segment}</p><h3 className="mt-1 text-3xl font-black">{asset.ticker}</h3><p className="text-slate-300">{asset.name}</p></div><button onClick={() => setFavorites((current) => isFavorite ? current.filter((ticker) => ticker !== asset.ticker) : [asset.ticker, ...current])} className="rounded-2xl bg-white/10 p-3 hover:bg-white/20"><Star className={cls("h-5 w-5", isFavorite && "fill-amber-400 text-amber-400")} /></button></div><div className="mt-6 grid grid-cols-3 gap-3"><InfoTile dark label="Preço" value={money.format(asset.price)} /><InfoTile dark label="Ano" value={pct(asset.changeYear)} /><InfoTile dark label="Score" value={`${asset.score}/100`} /></div></div><div className="mt-4 grid grid-cols-2 gap-3"><InfoTile label="Mercado" value={asset.market} /><InfoTile label="Setor" value={asset.sector} /><InfoTile label="Liquidez" value={compactMoney.format(asset.liquidity)} /><InfoTile label="Risco" value={asset.risk} /><InfoTile label="Dividend Yield" value={pct(asset.metrics.dividendYield)} /><InfoTile label="P/VP" value={metric(asset.metrics.pvp)} /><InfoTile label="P/L" value={metric(asset.metrics.pl)} /><InfoTile label="ROE" value={pct(asset.metrics.roe)} /></div><div className="mt-4 rounded-3xl border border-slate-200 p-4 dark:border-white/10"><p className="mb-2 text-sm font-black">Resumo IA do ativo</p><p className="text-sm text-slate-600 dark:text-slate-300">{asset.summary}</p><ul className="mt-3 space-y-2">{generateAiNotes(asset).map((note) => <li key={note} className="flex gap-2 text-sm text-slate-600 dark:text-slate-300"><ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-cyan-500" />{note}</li>)}</ul></div>{asset.source === "external" && <p className="mt-3 text-sm font-bold text-cyan-600 dark:text-cyan-300">Fonte: Google Finance via provedor externo</p>}<a href={googleFinanceUrl(asset)} target="_blank" rel="noreferrer" className="mt-4 flex w-full items-center justify-center rounded-2xl border border-slate-200 px-4 py-3 font-bold text-slate-700 transition hover:bg-slate-50 dark:border-white/10 dark:text-slate-100 dark:hover:bg-white/10">Abrir no Google Finanças</a><button onClick={() => onAddToPortfolio(asset)} className="mt-3 w-full rounded-2xl bg-cyan-500 px-4 py-3 font-bold text-white">Adicionar à carteira</button></PremiumCard>;
 }
 function InfoTile({ label, value, dark = false }: { label: string; value: string; dark?: boolean }) {
   return <div className={cls("rounded-2xl p-3", dark ? "bg-white/10" : "bg-slate-50 dark:bg-white/5")}><p className={cls("text-xs", dark ? "text-slate-300" : "text-slate-500")}>{label}</p><p className="mt-1 font-black">{value}</p></div>;
@@ -1073,7 +1073,7 @@ function PerformancePill({ asset, value }: { asset: Asset; value: number }) {
   return <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/5"><div className="flex items-center justify-between"><div><p className="text-sm text-slate-500">{asset.name}</p><p className="text-xl font-black">{asset.ticker}</p></div><div className={cls("flex items-center gap-1 rounded-full px-3 py-1 text-sm font-black", value >= 0 ? "bg-emerald-500/10 text-emerald-500" : "bg-red-500/10 text-red-500")}>{value >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}{pct(value)}</div></div></div>;
 }
 function ComparisonTable({ a, b }: { a: Asset; b: Asset }) {
-  const rows = [["PreÃƒÂ§o", money.format(a.price), money.format(b.price)], ["Dividend Yield", pct(a.metrics.dividendYield), pct(b.metrics.dividendYield)], ["P/L", metric(a.metrics.pl), metric(b.metrics.pl)], ["P/VP", metric(a.metrics.pvp), metric(b.metrics.pvp)], ["ROE", pct(a.metrics.roe), pct(b.metrics.roe)], ["CAGR", pct(a.metrics.cagr), pct(b.metrics.cagr)], ["Volatilidade", pct(a.metrics.volatility), pct(b.metrics.volatility)], ["Drawdown", pct(a.metrics.drawdown), pct(b.metrics.drawdown)], ["Liquidez", compactMoney.format(a.liquidity), compactMoney.format(b.liquidity)], ["Risco", a.risk, b.risk]];
+  const rows = [["Preço", money.format(a.price), money.format(b.price)], ["Dividend Yield", pct(a.metrics.dividendYield), pct(b.metrics.dividendYield)], ["P/L", metric(a.metrics.pl), metric(b.metrics.pl)], ["P/VP", metric(a.metrics.pvp), metric(b.metrics.pvp)], ["ROE", pct(a.metrics.roe), pct(b.metrics.roe)], ["CAGR", pct(a.metrics.cagr), pct(b.metrics.cagr)], ["Volatilidade", pct(a.metrics.volatility), pct(b.metrics.volatility)], ["Drawdown", pct(a.metrics.drawdown), pct(b.metrics.drawdown)], ["Liquidez", compactMoney.format(a.liquidity), compactMoney.format(b.liquidity)], ["Risco", a.risk, b.risk]];
   return <div className="mt-5 overflow-hidden rounded-3xl border border-slate-200 text-sm dark:border-white/10"><div className="grid grid-cols-3 bg-slate-50 p-3 font-bold dark:bg-white/5"><span>Indicador</span><span>{a.ticker}</span><span>{b.ticker}</span></div>{rows.map((row) => <div key={row[0]} className="grid grid-cols-3 border-t border-slate-100 p-3 dark:border-white/10"><span className="text-slate-500">{row[0]}</span><strong>{row[1]}</strong><strong>{row[2]}</strong></div>)}</div>;
 }
 function Input(props: React.InputHTMLAttributes<HTMLInputElement> & { label: string }) {
@@ -1091,7 +1091,7 @@ function WeightSlider({ label, value, onChange }: { label: string; value: number
   return <label className="mb-4 block"><div className="mb-2 flex justify-between text-sm"><span>{label}</span><strong>{value}</strong></div><input type="range" min="0" max="40" value={value} onChange={(e) => onChange(Number(e.target.value))} className="w-full accent-cyan-500" /></label>;
 }
 function RankingRow({ asset, index, onClick }: { asset: Asset; index: number; onClick: () => void }) {
-  return <button onClick={onClick} className="flex w-full items-center gap-4 rounded-3xl border border-slate-200 bg-white p-4 text-left transition hover:scale-[1.01] hover:shadow-premium dark:border-white/10 dark:bg-white/5"><span className="grid h-10 w-10 place-items-center rounded-2xl bg-slate-950 font-black text-white dark:bg-white dark:text-slate-950">{index}</span><span className="min-w-0 flex-1"><strong>{asset.ticker}</strong><span className="ml-2 text-sm text-slate-500">{asset.name}</span><p className="mt-1 text-xs text-slate-400">{typeLabels[asset.type]} Ã¢â‚¬Â¢ {asset.segment}</p></span><span className="rounded-full bg-cyan-500/10 px-3 py-1 font-black text-cyan-600 dark:text-cyan-300">{asset.score}</span></button>;
+  return <button onClick={onClick} className="flex w-full items-center gap-4 rounded-3xl border border-slate-200 bg-white p-4 text-left transition hover:scale-[1.01] hover:shadow-premium dark:border-white/10 dark:bg-white/5"><span className="grid h-10 w-10 place-items-center rounded-2xl bg-slate-950 font-black text-white dark:bg-white dark:text-slate-950">{index}</span><span className="min-w-0 flex-1"><strong>{asset.ticker}</strong><span className="ml-2 text-sm text-slate-500">{asset.name}</span><p className="mt-1 text-xs text-slate-400">{typeLabels[asset.type]} • {asset.segment}</p></span><span className="rounded-full bg-cyan-500/10 px-3 py-1 font-black text-cyan-600 dark:text-cyan-300">{asset.score}</span></button>;
 }
 function StatusPill({ status }: { status: ClientStatus | PaymentStatus }) {
   const map: Record<string, string> = { ativo: "bg-emerald-500/10 text-emerald-500", pago: "bg-emerald-500/10 text-emerald-500", bloqueado: "bg-red-500/10 text-red-500", vencido: "bg-amber-500/10 text-amber-500", pendente: "bg-amber-500/10 text-amber-500", cancelado: "bg-slate-500/10 text-slate-500" };
@@ -1099,7 +1099,7 @@ function StatusPill({ status }: { status: ClientStatus | PaymentStatus }) {
 }
 function PlanCard({ plan, setPlans }: { plan: Plan; setPlans: React.Dispatch<React.SetStateAction<Plan[]>> }) {
   function update(patch: Partial<Plan>) { setPlans((current) => current.map((item) => item.id === plan.id ? { ...item, ...patch } : item)); }
-  return <PremiumCard title={plan.name} description={`${plan.durationDays} dias de acesso`} icon={ShieldCheck}><div className="space-y-3"><Input label="Valor" type="number" step="0.01" value={plan.value} onChange={(e) => update({ value: Number(e.target.value) })} /><Input label="DuraÃƒÂ§ÃƒÂ£o em dias" type="number" value={plan.durationDays} onChange={(e) => update({ durationDays: Number(e.target.value) })} /><Select label="Status" value={plan.status} onChange={(e) => update({ status: e.target.value as "ativo" | "inativo" })}><option value="ativo">Ativo</option><option value="inativo">Inativo</option></Select><div className="rounded-2xl bg-slate-50 p-3 dark:bg-white/5"><p className="mb-2 text-sm font-bold">PermissÃƒÂµes</p>{clientModules.map((module) => <label key={module.id} className="mb-2 flex items-center gap-2 text-sm"><input type="checkbox" checked={plan.permissions.includes(module.id)} onChange={(e) => update({ permissions: e.target.checked ? [...plan.permissions, module.id] : plan.permissions.filter((id) => id !== module.id) })} />{module.label}</label>)}</div></div></PremiumCard>;
+  return <PremiumCard title={plan.name} description={`${plan.durationDays} dias de acesso`} icon={ShieldCheck}><div className="space-y-3"><Input label="Valor" type="number" step="0.01" value={plan.value} onChange={(e) => update({ value: Number(e.target.value) })} /><Input label="Duração em dias" type="number" value={plan.durationDays} onChange={(e) => update({ durationDays: Number(e.target.value) })} /><Select label="Status" value={plan.status} onChange={(e) => update({ status: e.target.value as "ativo" | "inativo" })}><option value="ativo">Ativo</option><option value="inativo">Inativo</option></Select><div className="rounded-2xl bg-slate-50 p-3 dark:bg-white/5"><p className="mb-2 text-sm font-bold">Permissões</p>{clientModules.map((module) => <label key={module.id} className="mb-2 flex items-center gap-2 text-sm"><input type="checkbox" checked={plan.permissions.includes(module.id)} onChange={(e) => update({ permissions: e.target.checked ? [...plan.permissions, module.id] : plan.permissions.filter((id) => id !== module.id) })} />{module.label}</label>)}</div></div></PremiumCard>;
 }
 function PermissionsEditor({ client, updateClient }: { client: Account; updateClient: (id: string, patch: Partial<Account>) => void }) {
   return <div className="mt-3 rounded-2xl bg-slate-50 p-3 dark:bg-white/5"><p className="mb-2 text-sm font-bold">Menus liberados para o cliente</p><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{clientModules.map((module) => <label key={module.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={client.permissions.includes(module.id)} onChange={(e) => updateClient(client.id, { permissions: e.target.checked ? [...client.permissions, module.id] : client.permissions.filter((id) => id !== module.id) })} />{module.label}</label>)}</div></div>;
@@ -1112,7 +1112,7 @@ function PieBlock({ data }: { data: Array<{ name: string; value: number }> }) {
   return <div className="h-80"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={data} dataKey="value" nameKey="name" innerRadius={65} outerRadius={110} paddingAngle={3}>{data.map((entry, index) => <Cell key={entry.name} fill={palette[index % palette.length]} />)}</Pie><Tooltip formatter={(value) => money.format(Number(value))} /><Legend /></PieChart></ResponsiveContainer></div>;
 }
 function SettingsSection({ currentUser, darkMode, setDarkMode, settings, setSettings, changePassword, logout }: { currentUser: Account; darkMode: boolean; setDarkMode: (value: boolean) => void; settings: { currency: string; language: string; autoUpdate: boolean; priceAlerts: boolean; dividendAlerts: boolean }; setSettings: React.Dispatch<React.SetStateAction<{ currency: string; language: string; autoUpdate: boolean; priceAlerts: boolean; dividendAlerts: boolean }>>; changePassword: (event: React.FormEvent<HTMLFormElement>) => void; logout: () => void }) {
-  return <Section title="ConfiguraÃƒÂ§ÃƒÂµes" subtitle="Conta, senha, tema, alertas e preferÃƒÂªncias." eyebrow="PreferÃƒÂªncias"><div className="grid gap-6 lg:grid-cols-2"><PremiumCard title="Dados da conta" description="InformaÃƒÂ§ÃƒÂµes do usuÃƒÂ¡rio autenticado." icon={UserCog}><InfoTile label="Nome" value={currentUser.name} /><div className="mt-3"><InfoTile label="Perfil" value={currentUser.role === "ADMIN" ? "Administrador" : "Cliente"} /></div><div className="mt-3"><InfoTile label="Status" value={currentUser.status} /></div><button onClick={logout} className="mt-4 rounded-2xl bg-red-500 px-5 py-3 font-bold text-white"><LogOut className="mr-2 inline h-4 w-4" />Sair da conta</button></PremiumCard><PremiumCard title="Alterar senha" description="A senha ÃƒÂ© armazenada como hash SHA-256 nesta versÃƒÂ£o local." icon={KeyRound}><form onSubmit={changePassword} className="grid gap-3"><Input name="currentPassword" type="password" label="Senha atual" required /><Input name="newPassword" type="password" label="Nova senha" required /><Input name="confirmPassword" type="password" label="Confirmar nova senha" required /><button className="rounded-2xl bg-cyan-500 px-5 py-3 font-bold text-white">Alterar senha</button></form></PremiumCard><PremiumCard title="Tema e visual" description="Modo claro/escuro aplicado em toda a plataforma." icon={Moon}><Toggle label="Modo escuro" checked={darkMode} onChange={setDarkMode} /><Toggle label="AtualizaÃƒÂ§ÃƒÂ£o automÃƒÂ¡tica" checked={settings.autoUpdate} onChange={(value) => setSettings((current) => ({ ...current, autoUpdate: value }))} /><Toggle label="Alertas de preÃƒÂ§o" checked={settings.priceAlerts} onChange={(value) => setSettings((current) => ({ ...current, priceAlerts: value }))} /><Toggle label="Alertas de dividendos" checked={settings.dividendAlerts} onChange={(value) => setSettings((current) => ({ ...current, dividendAlerts: value }))} /></PremiumCard><PremiumCard title="LocalizaÃƒÂ§ÃƒÂ£o" description="Moeda e idioma da interface." icon={Settings}><Select label="Moeda" value={settings.currency} onChange={(e) => setSettings((current) => ({ ...current, currency: e.target.value }))}><option value="BRL">Real brasileiro</option><option value="USD">DÃƒÂ³lar americano</option></Select><div className="mt-3"><Select label="Idioma" value={settings.language} onChange={(e) => setSettings((current) => ({ ...current, language: e.target.value }))}><option value="pt-BR">PortuguÃƒÂªs Brasil</option><option value="en-US">English</option></Select></div></PremiumCard></div></Section>;
+  return <Section title="Configurações" subtitle="Conta, senha, tema, alertas e preferências." eyebrow="Preferências"><div className="grid gap-6 lg:grid-cols-2"><PremiumCard title="Dados da conta" description="Informações do usuário autenticado." icon={UserCog}><InfoTile label="Nome" value={currentUser.name} /><div className="mt-3"><InfoTile label="Perfil" value={currentUser.role === "ADMIN" ? "Administrador" : "Cliente"} /></div><div className="mt-3"><InfoTile label="Status" value={currentUser.status} /></div><button onClick={logout} className="mt-4 rounded-2xl bg-red-500 px-5 py-3 font-bold text-white"><LogOut className="mr-2 inline h-4 w-4" />Sair da conta</button></PremiumCard><PremiumCard title="Alterar senha" description="A senha é armazenada como hash SHA-256 nesta versão local." icon={KeyRound}><form onSubmit={changePassword} className="grid gap-3"><Input name="currentPassword" type="password" label="Senha atual" required /><Input name="newPassword" type="password" label="Nova senha" required /><Input name="confirmPassword" type="password" label="Confirmar nova senha" required /><button className="rounded-2xl bg-cyan-500 px-5 py-3 font-bold text-white">Alterar senha</button></form></PremiumCard><PremiumCard title="Tema e visual" description="Modo claro/escuro aplicado em toda a plataforma." icon={Moon}><Toggle label="Modo escuro" checked={darkMode} onChange={setDarkMode} /><Toggle label="Atualização automática" checked={settings.autoUpdate} onChange={(value) => setSettings((current) => ({ ...current, autoUpdate: value }))} /><Toggle label="Alertas de preço" checked={settings.priceAlerts} onChange={(value) => setSettings((current) => ({ ...current, priceAlerts: value }))} /><Toggle label="Alertas de dividendos" checked={settings.dividendAlerts} onChange={(value) => setSettings((current) => ({ ...current, dividendAlerts: value }))} /></PremiumCard><PremiumCard title="Localização" description="Moeda e idioma da interface." icon={Settings}><Select label="Moeda" value={settings.currency} onChange={(e) => setSettings((current) => ({ ...current, currency: e.target.value }))}><option value="BRL">Real brasileiro</option><option value="USD">Dólar americano</option></Select><div className="mt-3"><Select label="Idioma" value={settings.language} onChange={(e) => setSettings((current) => ({ ...current, language: e.target.value }))}><option value="pt-BR">Português Brasil</option><option value="en-US">English</option></Select></div></PremiumCard></div></Section>;
 }
 function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
   return <button onClick={() => onChange(!checked)} className="mb-3 flex w-full items-center justify-between rounded-2xl bg-slate-50 p-4 text-left dark:bg-white/5"><span className="font-semibold">{label}</span><span className={cls("h-7 w-12 rounded-full p-1 transition", checked ? "bg-cyan-500" : "bg-slate-300")}><span className={cls("block h-5 w-5 rounded-full bg-white transition", checked && "translate-x-5")} /></span></button>;

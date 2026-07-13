@@ -1,5 +1,5 @@
 export type AssetType = "ACAO" | "FII" | "ETF" | "BDR" | "CRIPTO";
-export type RiskLevel = "Baixo" | "MÃ©dio" | "Alto";
+export type RiskLevel = "Baixo" | "Médio" | "Alto";
 export type CurrencyCode = "BRL" | "USD";
 
 export type PricePoint = {
