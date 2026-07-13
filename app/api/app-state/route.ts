@@ -1,3 +1,4 @@
+import { get, put } from "@vercel/blob";
 import { NextResponse } from "next/server";
 import { hasDatabaseUrl, prisma } from "@/lib/prisma";
 
@@ -11,6 +12,7 @@ type AppStatePayload = {
 };
 
 const allClientModules = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "radar", "relatorios", "configuracoes"];
+const appStateBlobPath = process.env.APP_STATE_BLOB_PATH || "alfatec-invest-pro/app-state.json";
 
 const defaultState: AppStatePayload = {
   accounts: [
@@ -51,6 +53,26 @@ const defaultState: AppStatePayload = {
   portfolio: []
 };
 
+function findEnvBySuffix(suffix: string, validator: (value: string) => boolean = (value) => value.trim() !== "") {
+  const directValue = process.env[suffix];
+  if (directValue && validator(directValue)) return directValue;
+  const matchingKey = Object.keys(process.env).find((key) => key.endsWith(`_${suffix}`) && validator(process.env[key] || ""));
+  return matchingKey ? process.env[matchingKey] || "" : "";
+}
+
+const blobReadWriteToken =
+  findEnvBySuffix("BLOB_READ_WRITE_TOKEN", (value) => value.startsWith("vercel_blob_rw_")) ||
+  findEnvBySuffix("READ_WRITE_TOKEN", (value) => value.startsWith("vercel_blob_rw_"));
+const connectedBlobStoreId = findEnvBySuffix("BLOB_STORE_ID") || findEnvBySuffix("STORE_ID");
+
+if (blobReadWriteToken && !process.env.BLOB_READ_WRITE_TOKEN) process.env.BLOB_READ_WRITE_TOKEN = blobReadWriteToken;
+if (connectedBlobStoreId && !process.env.BLOB_STORE_ID) process.env.BLOB_STORE_ID = connectedBlobStoreId;
+
+const hasBlobStorage = Boolean(
+  blobReadWriteToken ||
+  (connectedBlobStoreId && (process.env.VERCEL_OIDC_TOKEN || process.env.VERCEL === "1"))
+);
+
 function stringField(value: unknown, key: string) {
   if (!value || typeof value !== "object") return "";
   const field = (value as Record<string, unknown>)[key];
@@ -81,6 +103,22 @@ function normalizeState(value: unknown): AppStatePayload {
   };
 }
 
+function statesDiffer(a: unknown, b: unknown) {
+  return JSON.stringify(a) !== JSON.stringify(b);
+}
+
+function storageProvider() {
+  if (hasDatabaseUrl) return "postgres";
+  if (hasBlobStorage) return "vercel-blob";
+  return "not-configured";
+}
+
+function storageNotConfiguredResponse() {
+  return NextResponse.json({
+    error: "Banco de dados permanente não configurado. Vincule um Vercel Blob Store ao projeto ou configure DATABASE_URL, POSTGRES_PRISMA_URL ou POSTGRES_URL na Vercel."
+  }, { status: 503 });
+}
+
 async function ensureTable() {
   await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS "PersistentAppState" (
     "key" TEXT PRIMARY KEY,
@@ -89,20 +127,20 @@ async function ensureTable() {
   )`);
 }
 
-async function readState() {
+async function readPostgresState() {
   await ensureTable();
   const rows = await prisma.$queryRaw<Array<{ value: unknown }>>`SELECT "value" FROM "PersistentAppState" WHERE "key" = 'default' LIMIT 1`;
   if (rows[0]?.value) {
     const state = normalizeState(rows[0].value);
-    if (JSON.stringify(state) !== JSON.stringify(rows[0].value)) await writeState(state);
+    if (statesDiffer(state, rows[0].value)) await writePostgresState(state);
     return state;
   }
   const state = normalizeState(defaultState);
-  await writeState(state);
+  await writePostgresState(state);
   return state;
 }
 
-async function writeState(state: AppStatePayload) {
+async function writePostgresState(state: AppStatePayload) {
   await ensureTable();
   const stateJson = JSON.stringify(normalizeState(state));
   await prisma.$executeRaw`INSERT INTO "PersistentAppState" ("key", "value", "updatedAt")
@@ -110,30 +148,72 @@ async function writeState(state: AppStatePayload) {
     ON CONFLICT ("key") DO UPDATE SET "value" = EXCLUDED."value", "updatedAt" = NOW()`;
 }
 
-export async function GET() {
-  if (!hasDatabaseUrl) {
-    return NextResponse.json({ error: "Banco de dados não configurado. Configure DATABASE_URL, POSTGRES_PRISMA_URL ou POSTGRES_URL na Vercel." }, { status: 503 });
+async function readBlobState() {
+  try {
+    const blob = await get(appStateBlobPath, {
+      access: "private",
+      token: blobReadWriteToken || undefined,
+      useCache: false
+    });
+    if (blob?.stream) {
+      const text = await new Response(blob.stream).text();
+      const state = normalizeState(JSON.parse(text));
+      if (statesDiffer(state, JSON.parse(text))) await writeBlobState(state);
+      return state;
+    }
+  } catch (error) {
+    if (!(error instanceof Error) || error.name !== "BlobNotFoundError") throw error;
   }
 
+  const state = normalizeState(defaultState);
+  await writeBlobState(state);
+  return state;
+}
+
+async function writeBlobState(state: AppStatePayload) {
+  await put(appStateBlobPath, JSON.stringify(normalizeState(state), null, 2), {
+    access: "private",
+    allowOverwrite: true,
+    cacheControlMaxAge: 60,
+    contentType: "application/json",
+    token: blobReadWriteToken || undefined
+  });
+}
+
+async function readState() {
+  if (hasDatabaseUrl) return readPostgresState();
+  if (hasBlobStorage) return readBlobState();
+  throw new Error("PERSISTENT_STORAGE_NOT_CONFIGURED");
+}
+
+async function writeState(state: AppStatePayload) {
+  if (hasDatabaseUrl) return writePostgresState(state);
+  if (hasBlobStorage) return writeBlobState(state);
+  throw new Error("PERSISTENT_STORAGE_NOT_CONFIGURED");
+}
+
+export async function GET() {
+  if (storageProvider() === "not-configured") return storageNotConfiguredResponse();
+
   try {
-    return NextResponse.json(await readState());
+    const response = NextResponse.json(await readState());
+    response.headers.set("x-alfatec-storage", storageProvider());
+    return response;
   } catch (error) {
     console.error("Erro ao carregar estado persistente", error);
-    return NextResponse.json({ error: "Não foi possível carregar os dados do banco." }, { status: 500 });
+    return NextResponse.json({ error: "Não foi possível carregar os dados do banco permanente." }, { status: 500 });
   }
 }
 
 export async function PUT(request: Request) {
-  if (!hasDatabaseUrl) {
-    return NextResponse.json({ error: "Banco de dados não configurado. Configure DATABASE_URL, POSTGRES_PRISMA_URL ou POSTGRES_URL na Vercel." }, { status: 503 });
-  }
+  if (storageProvider() === "not-configured") return storageNotConfiguredResponse();
 
   try {
     const body = normalizeState(await request.json());
     await writeState(body);
-    return NextResponse.json({ ok: true, updatedAt: new Date().toISOString() });
+    return NextResponse.json({ ok: true, provider: storageProvider(), updatedAt: new Date().toISOString() });
   } catch (error) {
     console.error("Erro ao salvar estado persistente", error);
-    return NextResponse.json({ error: "Não foi possível salvar os dados no banco." }, { status: 500 });
+    return NextResponse.json({ error: "Não foi possível salvar os dados no banco permanente." }, { status: 500 });
   }
 }
