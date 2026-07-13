@@ -27,9 +27,9 @@ const defaultState: AppStatePayload = {
     }
   ],
   plans: [
-    { id: "semanal", name: "Semanal", value: 49.9, durationDays: 7, status: "ativo", permissions: allClientModules },
-    { id: "mensal", name: "Mensal", value: 149.9, durationDays: 30, status: "ativo", permissions: allClientModules },
-    { id: "anual", name: "Anual", value: 1299.9, durationDays: 365, status: "ativo", permissions: allClientModules }
+    { id: "semanal", name: "Semanal", value: 9.9, durationDays: 7, status: "ativo", permissions: allClientModules },
+    { id: "mensal", name: "Mensal", value: 24.9, durationDays: 30, status: "ativo", permissions: allClientModules },
+    { id: "anual", name: "Anual", value: 199.9, durationDays: 365, status: "ativo", permissions: allClientModules }
   ],
   payments: [],
   portfolio: []

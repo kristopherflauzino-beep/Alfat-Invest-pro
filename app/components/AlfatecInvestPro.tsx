@@ -73,7 +73,7 @@ import {
 import type { Asset, AssetType, PortfolioPosition, RadarWeights } from "@/lib/types";
 
 type Role = "ADMIN" | "CLIENTE";
-type ClientStatus = "ativo" | "bloqueado" | "vencido";
+type ClientStatus = "ativo" | "pendente" | "bloqueado" | "vencido";
 type PaymentStatus = "pago" | "pendente" | "vencido" | "cancelado";
 type ClientModuleId = "dashboard" | "mercado" | "oportunidades" | "comparador" | "carteira" | "radar" | "relatorios" | "configuracoes";
 type AdminModuleId = "admin-dashboard" | "clientes" | "planos" | "financeiro" | "admin-relatorios" | "configuracoes";
@@ -175,10 +175,12 @@ const ranges: Array<{ id: RangeId; label: string; points: number }> = [
   { id: "5A", label: "5 Anos", points: 253 },
   { id: "MAX", label: "Máximo", points: 9999 }
 ];
+const suggestedPlanValues: Record<string, number> = { semanal: 9.9, mensal: 24.9, anual: 199.9 };
+const legacyPlanValues: Record<string, number[]> = { semanal: [49.9], mensal: [149.9], anual: [1299.9] };
 const defaultPlans: Plan[] = [
-  { id: "semanal", name: "Semanal", value: 49.9, durationDays: 7, status: "ativo", permissions: allClientModules },
-  { id: "mensal", name: "Mensal", value: 149.9, durationDays: 30, status: "ativo", permissions: allClientModules },
-  { id: "anual", name: "Anual", value: 1299.9, durationDays: 365, status: "ativo", permissions: allClientModules }
+  { id: "semanal", name: "Semanal", value: suggestedPlanValues.semanal, durationDays: 7, status: "ativo", permissions: allClientModules },
+  { id: "mensal", name: "Mensal", value: suggestedPlanValues.mensal, durationDays: 30, status: "ativo", permissions: allClientModules },
+  { id: "anual", name: "Anual", value: suggestedPlanValues.anual, durationDays: 365, status: "ativo", permissions: allClientModules }
 ];
 const starterPortfolio: PortfolioPosition[] = [
   { id: "p1", ticker: "GARE11", quantity: 120, averagePrice: 9.35, broker: "Rico", purchaseDate: "2026-02-10" },
@@ -293,7 +295,11 @@ function normalizeAccounts(accounts: Account[]) {
 
 function normalizePlans(plans: Plan[]) {
   const source = plans.length ? plans : defaultPlans;
-  return source.map((plan) => ({ ...plan, permissions: plan.permissions.length >= 7 ? allClientModules : plan.permissions }));
+  return source.map((plan) => {
+    const legacyValues = legacyPlanValues[plan.id] ?? [];
+    const value = legacyValues.includes(plan.value) ? suggestedPlanValues[plan.id] ?? plan.value : plan.value;
+    return { ...plan, value, permissions: plan.permissions.length >= 7 ? allClientModules : plan.permissions };
+  });
 }
 
 function mergeById<T extends { id: string }>(server: T[], local: T[]) {
@@ -314,10 +320,19 @@ function mergeAccounts(server: Account[], local: Account[]) {
   return normalizeAccounts(Array.from(map.values()));
 }
 
+function applyPlanValuesToAccounts(accounts: Account[], plans: Plan[]) {
+  return accounts.map((account) => {
+    const plan = plans.find((item) => item.id === account.planId);
+    return account.role === "CLIENTE" && plan ? { ...account, planValue: plan.value } : account;
+  });
+}
+
 function mergeAppState(server: Partial<AppStatePayload>, local: AppStatePayload): AppStatePayload {
+  const plans = normalizePlans(mergeById(normalizePlans(server.plans ?? []), local.plans));
+  const accounts = applyPlanValuesToAccounts(mergeAccounts(normalizeAccounts(server.accounts ?? []), local.accounts), plans);
   return {
-    accounts: mergeAccounts(normalizeAccounts(server.accounts ?? []), local.accounts),
-    plans: normalizePlans(mergeById(normalizePlans(server.plans ?? []), local.plans)),
+    accounts,
+    plans,
     payments: mergeById(server.payments ?? [], local.payments),
     portfolio: (server.portfolio?.length ? server.portfolio : local.portfolio).length ? (server.portfolio?.length ? server.portfolio : local.portfolio) : starterPortfolio
   };
@@ -328,6 +343,10 @@ function statesDiffer(a: AppStatePayload, b: Partial<AppStatePayload>) {
     JSON.stringify(a.plans) !== JSON.stringify(b.plans ?? []) ||
     JSON.stringify(a.payments) !== JSON.stringify(b.payments ?? []) ||
     JSON.stringify(a.portfolio) !== JSON.stringify(b.portfolio ?? []);
+}
+
+function planValueFor(plans: Plan[], planId?: string) {
+  return plans.find((plan) => plan.id === planId)?.value ?? 0;
 }
 function rangeHistory(asset: Asset, range: RangeId) {
   const config = ranges.find((item) => item.id === range) ?? ranges[4];
@@ -425,6 +444,7 @@ export default function AlfatecInvestPro() {
   const [loginPassword, setLoginPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState("");
+  const [registerMessage, setRegisterMessage] = useState("");
   const [clientModule, setClientModule] = useState<ClientModuleId>("dashboard");
   const [adminModule, setAdminModule] = useState<ClientModuleId | AdminModuleId>("admin-dashboard");
   const [globalSearch, setGlobalSearch] = useState("");
@@ -583,13 +603,24 @@ export default function AlfatecInvestPro() {
     setLoginError("");
     const cleanUser = loginUser.trim().toLowerCase();
     if (!cleanUser || !loginPassword) {
-      setLoginError("Informe usuário/e-mail e senha.");
+      setLoginError("Informe nome, usuário/e-mail e senha.");
+      return;
+    }
+    if (!stateLoaded) {
+      setLoginError("Carregando dados do banco. Tente novamente em alguns segundos.");
       return;
     }
     const hash = await sha256(loginPassword);
-    const found = accounts.find((account) => (account.username.toLowerCase() === cleanUser || account.email.toLowerCase() === cleanUser) && account.passwordHash === hash);
+    const found = accounts.find((account) => {
+      const identifiers = [account.username, account.email, account.name].map((value) => value.toLowerCase());
+      return identifiers.includes(cleanUser) && account.passwordHash === hash;
+    });
     if (!found) {
-      setLoginError("Login inválido. Verifique usuário/e-mail e senha.");
+      setLoginError("Login inválido. Use seu nome, usuário ou e-mail cadastrado.");
+      return;
+    }
+    if (found.role === "CLIENTE" && found.status === "pendente") {
+      setLoginError("Conta criada e aguardando liberação do administrador.");
       return;
     }
     if (found.role === "CLIENTE" && (found.status === "bloqueado" || found.status === "vencido" || isExpired(found.dueDate))) {
@@ -599,6 +630,42 @@ export default function AlfatecInvestPro() {
     setSessionId(found.id);
     setClientModule("dashboard");
     setAdminModule("admin-dashboard");
+  }
+
+  async function requestAccount(payload: { name: string; email: string; phone: string; password: string; planId: string }) {
+    setRegisterMessage("");
+    setLoginError("");
+    const name = payload.name.trim();
+    const email = payload.email.trim().toLowerCase();
+    const phone = payload.phone.trim();
+    const plan = plans.find((item) => item.id === payload.planId) ?? plans[1];
+    if (!name || !email || payload.password.length < 6) {
+      setRegisterMessage("Informe nome, e-mail e senha com pelo menos 6 caracteres.");
+      return;
+    }
+    const exists = accounts.some((account) => account.email.toLowerCase() === email || account.username.toLowerCase() === email || account.name.toLowerCase() === name.toLowerCase());
+    if (exists) {
+      setRegisterMessage("Já existe uma conta com esse nome ou e-mail.");
+      return;
+    }
+    const client: Account = {
+      id: crypto.randomUUID(),
+      role: "CLIENTE",
+      username: email,
+      email,
+      name,
+      phone,
+      passwordHash: await sha256(payload.password),
+      planId: plan.id,
+      planValue: plan.value,
+      status: "pendente",
+      createdAt: todayIso(),
+      dueDate: addDays(plan.durationDays),
+      notes: "Cadastro solicitado pelo usuário. Aguardando liberação do admin.",
+      permissions: plan.permissions
+    };
+    setAccounts((current) => [client, ...current]);
+    setRegisterMessage("Conta criada. Aguarde a liberação do administrador para acessar.");
   }
 
   function logout() {
@@ -692,13 +759,13 @@ export default function AlfatecInvestPro() {
       id: crypto.randomUUID(),
       clientId,
       planId,
-      value: Number(formData.get("value") || client.planValue || plan.value),
+      value: Number(formData.get("value") || plan.value),
       paymentDate: String(formData.get("paymentDate") ?? "") || todayIso(),
       dueDate,
       status: String(formData.get("status") ?? "pago") as PaymentStatus
     };
     setPayments((current) => [payment, ...current]);
-    if (payment.status === "pago") updateClient(clientId, { status: "ativo", planId, planValue: client.planValue ?? plan.value, dueDate, permissions: plan.permissions });
+    if (payment.status === "pago") updateClient(clientId, { status: "ativo", planId, planValue: plan.value, dueDate, permissions: plan.permissions });
     event.currentTarget.reset();
   }
 
@@ -772,18 +839,18 @@ export default function AlfatecInvestPro() {
   if (!currentUser) {
     return (
       <main className={cls("min-h-screen transition-colors", darkMode ? "dark bg-[#020817] text-slate-100" : "bg-slate-100 text-slate-950")}>
-        <LoginScreen darkMode={darkMode} setDarkMode={setDarkMode} loginUser={loginUser} setLoginUser={setLoginUser} loginPassword={loginPassword} setLoginPassword={setLoginPassword} showPassword={showPassword} setShowPassword={setShowPassword} loginError={loginError} onSubmit={handleLogin} />
+        <LoginScreen darkMode={darkMode} setDarkMode={setDarkMode} loginUser={loginUser} setLoginUser={setLoginUser} loginPassword={loginPassword} setLoginPassword={setLoginPassword} showPassword={showPassword} setShowPassword={setShowPassword} loginError={loginError} registerMessage={registerMessage} plans={plans} stateLoaded={stateLoaded} onSubmit={handleLogin} onRegister={requestAccount} />
       </main>
     );
   }
 
-  if (currentUser.role === "CLIENTE" && (currentUser.status === "bloqueado" || currentUser.status === "vencido" || isExpired(currentUser.dueDate))) {
+  if (currentUser.role === "CLIENTE" && (currentUser.status === "pendente" || currentUser.status === "bloqueado" || currentUser.status === "vencido" || isExpired(currentUser.dueDate))) {
     return (
       <Shell darkMode={darkMode} setDarkMode={setDarkMode} logout={logout} user={currentUser} modules={[]} activeId="" onMenu={() => undefined}>
         <div className="mx-auto max-w-3xl py-16">
-          <PremiumCard title="Acesso bloqueado" description="Sua conta não possui permissão ativa para acessar a plataforma." icon={Lock}>
+          <PremiumCard title={currentUser.status === "pendente" ? "Acesso aguardando liberação" : "Acesso bloqueado"} description="Sua conta ainda não possui permissão ativa para acessar a plataforma." icon={Lock}>
             <div className="rounded-3xl bg-red-500/10 p-6 text-red-500">
-              <p className="text-xl font-black">Seu acesso está temporariamente bloqueado. Entre em contato com o administrador.</p>
+              <p className="text-xl font-black">{currentUser.status === "pendente" ? "Seu cadastro foi recebido e aguarda liberação do administrador." : "Seu acesso está temporariamente bloqueado. Entre em contato com o administrador."}</p>
               <p className="mt-2 text-sm">Status atual: {currentUser.status}. Vencimento: {currentUser.dueDate ?? "não informado"}.</p>
             </div>
             <button onClick={logout} className="mt-5 rounded-2xl bg-slate-950 px-5 py-3 font-bold text-white dark:bg-white dark:text-slate-950">Sair da conta</button>
@@ -850,12 +917,12 @@ export default function AlfatecInvestPro() {
                           <select aria-label="Plano do cliente" value={client.planId ?? ""} onChange={(e) => changeClientPlan(client, e.target.value)} className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-white/10 dark:bg-slate-950">
                             {plans.map((planItem) => <option key={planItem.id} value={planItem.id}>{planItem.name}</option>)}
                           </select>
-                          <input aria-label="Valor do plano do cliente" type="number" min="0" step="0.01" value={client.planValue ?? plan?.value ?? 0} onChange={(e) => updateClient(client.id, { planValue: Number(e.target.value) })} className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-white/10 dark:bg-slate-950" />
+                          <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold dark:border-white/10 dark:bg-slate-950">{money.format(plan?.value ?? client.planValue ?? 0)}</div>
                           <input type="date" value={client.dueDate ?? ""} onChange={(e) => updateClient(client.id, { dueDate: e.target.value, status: e.target.value < todayIso() ? "vencido" : "ativo" })} className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-white/10 dark:bg-slate-950" />
-                          <button onClick={() => updateClient(client.id, { status: client.status === "bloqueado" ? "ativo" : "bloqueado" })} className={cls("rounded-2xl px-3 py-2 text-sm font-bold", client.status === "bloqueado" ? "bg-emerald-500 text-white" : "bg-red-500 text-white")}>{client.status === "bloqueado" ? <Unlock className="mr-1 inline h-4 w-4" /> : <Lock className="mr-1 inline h-4 w-4" />}{client.status === "bloqueado" ? "Desbloquear" : "Bloquear"}</button>
+                          {client.status === "pendente" ? <button onClick={() => updateClient(client.id, { status: "ativo", dueDate: client.dueDate || addDays(plan?.durationDays ?? 30), permissions: plan?.permissions ?? client.permissions, planValue: plan?.value ?? client.planValue })} className="rounded-2xl bg-emerald-500 px-3 py-2 text-sm font-bold text-white"><Unlock className="mr-1 inline h-4 w-4" />Liberar acesso</button> : <button onClick={() => updateClient(client.id, { status: client.status === "bloqueado" ? "ativo" : "bloqueado" })} className={cls("rounded-2xl px-3 py-2 text-sm font-bold", client.status === "bloqueado" ? "bg-emerald-500 text-white" : "bg-red-500 text-white")}>{client.status === "bloqueado" ? <Unlock className="mr-1 inline h-4 w-4" /> : <Lock className="mr-1 inline h-4 w-4" />}{client.status === "bloqueado" ? "Desbloquear" : "Bloquear"}</button>}
                           <button onClick={() => setAccounts((current) => current.filter((account) => account.id !== client.id))} className="rounded-2xl bg-slate-100 px-3 py-2 text-sm font-bold text-red-500 dark:bg-white/10"><Trash2 className="mr-1 inline h-4 w-4" />Excluir</button>
                         </div>
-                        <p className="mt-2 text-xs font-semibold text-slate-500 dark:text-slate-300">Valor individual do plano: {money.format(client.planValue ?? plan?.value ?? 0)}</p>
+                        <p className="mt-2 text-xs font-semibold text-slate-500 dark:text-slate-300">Valor atual da assinatura: {money.format(plan?.value ?? client.planValue ?? 0)}</p>
                         <button onClick={() => setSelectedClientId(selectedClientId === client.id ? null : client.id)} className="mt-3 text-sm font-bold text-teal-500">{selectedClientId === client.id ? "Ocultar permissões" : "Editar permissões"}</button>
                         {selectedClientId === client.id && <PermissionsEditor client={client} updateClient={updateClient} />}
                       </div>
@@ -870,10 +937,10 @@ export default function AlfatecInvestPro() {
         {adminModule === "planos" && (
           <Section title="Planos" subtitle="Configure valores, duração, status e permissões sem alterar clientes já cadastrados." eyebrow="Liberação comercial">
             <div className="mb-5 rounded-3xl border border-cyan-400/30 bg-cyan-500/10 p-4 text-sm font-semibold text-cyan-800 dark:text-cyan-200">
-              Alterações feitas aqui atualizam apenas os planos para novas cobranças e renovações. Clientes já cadastrados, como Tutu e Pedro Paladino, continuam com cadastro, status, vencimento e permissões preservados.
+              Alterações feitas aqui atualizam o valor da assinatura de todos os clientes vinculados ao plano, sem apagar cadastros, status, vencimentos ou permissões.
             </div>
             <div className="grid gap-6 lg:grid-cols-3">
-              {plans.map((plan) => <PlanCard key={plan.id} plan={plan} setPlans={setPlans} />)}
+              {plans.map((plan) => <PlanCard key={plan.id} plan={plan} setPlans={setPlans} setAccounts={setAccounts} />)}
             </div>
           </Section>
         )}
@@ -1174,12 +1241,27 @@ function Shell({ darkMode, setDarkMode, logout, user, modules, activeId, onMenu,
   );
 }
 
-function LoginScreen({ darkMode, setDarkMode, loginUser, setLoginUser, loginPassword, setLoginPassword, showPassword, setShowPassword, loginError, onSubmit }: { darkMode: boolean; setDarkMode: (value: boolean) => void; loginUser: string; setLoginUser: (value: string) => void; loginPassword: string; setLoginPassword: (value: string) => void; showPassword: boolean; setShowPassword: (value: boolean) => void; loginError: string; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void }) {
+function LoginScreen({ darkMode, setDarkMode, loginUser, setLoginUser, loginPassword, setLoginPassword, showPassword, setShowPassword, loginError, registerMessage, plans, stateLoaded, onSubmit, onRegister }: { darkMode: boolean; setDarkMode: (value: boolean) => void; loginUser: string; setLoginUser: (value: string) => void; loginPassword: string; setLoginPassword: (value: string) => void; showPassword: boolean; setShowPassword: (value: boolean) => void; loginError: string; registerMessage: string; plans: Plan[]; stateLoaded: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onRegister: (payload: { name: string; email: string; phone: string; password: string; planId: string }) => void }) {
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const activePlans = plans.filter((plan) => plan.status === "ativo");
+
+  function submitRegister(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    onRegister({
+      name: String(formData.get("name") ?? ""),
+      email: String(formData.get("email") ?? ""),
+      phone: String(formData.get("phone") ?? ""),
+      password: String(formData.get("password") ?? ""),
+      planId: String(formData.get("planId") ?? activePlans[0]?.id ?? "mensal")
+    });
+  }
+
   return (
-    <div className="relative grid h-screen min-h-screen overflow-hidden bg-slate-100 px-4 text-slate-950 dark:bg-[#020817] dark:text-slate-100 sm:px-6">
+    <div className="relative grid min-h-screen overflow-y-auto bg-slate-100 px-4 py-6 text-slate-950 dark:bg-[#020817] dark:text-slate-100 sm:px-6">
       <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_20%_15%,rgba(6,182,212,0.22),transparent_34%),radial-gradient(circle_at_78%_8%,rgba(37,99,235,0.18),transparent_32%),radial-gradient(circle_at_50%_100%,rgba(20,184,166,0.12),transparent_34%)]" />
-      <div className="relative z-10 grid h-full place-items-center">
-        <motion.div initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} className="grid w-full max-w-4xl overflow-hidden rounded-[2rem] border border-slate-200/80 bg-white/90 shadow-2xl backdrop-blur-2xl dark:border-white/10 dark:bg-slate-950/90 lg:grid-cols-[0.9fr_1fr]">
+      <div className="relative z-10 grid min-h-full place-items-center">
+        <motion.div initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} className="grid w-full max-w-5xl overflow-hidden rounded-[2rem] border border-slate-200/80 bg-white/90 shadow-2xl backdrop-blur-2xl dark:border-white/10 dark:bg-slate-950/90 lg:grid-cols-[0.86fr_1fr]">
           <div className="hidden overflow-hidden bg-slate-950/95 p-7 text-white lg:flex lg:flex-col lg:justify-center">
             <div className="pointer-events-none absolute inset-y-0 left-0 w-1/2 bg-[radial-gradient(circle_at_top,#0ea5e9_0,transparent_38%)] opacity-25" />
             <img src="/logo-alfatec.png" alt="Invest Pro" className="relative z-10 mx-auto h-56 w-56 object-contain" />
@@ -1189,29 +1271,50 @@ function LoginScreen({ darkMode, setDarkMode, loginUser, setLoginUser, loginPass
               <p className="mt-3 text-sm leading-6 text-slate-300">Gestão de clientes, planos, financeiro e análise inteligente de investimentos em uma interface profissional.</p>
             </div>
           </div>
-          <form onSubmit={onSubmit} className="relative p-6 sm:p-8 lg:p-10">
+          <div className="relative p-6 sm:p-8 lg:p-10">
             <div className="mb-6 flex items-center justify-between gap-4">
               <div className="flex items-center gap-3">
                 <img src="/logo-alfatec.png" alt="Invest Pro" className="h-16 w-16 object-contain lg:hidden" />
                 <div>
-                  <p className="text-xs font-bold uppercase tracking-[0.28em] text-cyan-500">Login</p>
-                  <h1 className="text-2xl font-black">Entrar na plataforma</h1>
+                  <p className="text-xs font-bold uppercase tracking-[0.28em] text-cyan-500">{mode === "login" ? "Login" : "Nova conta"}</p>
+                  <h1 className="text-2xl font-black">{mode === "login" ? "Entrar na plataforma" : "Criar conta"}</h1>
                 </div>
               </div>
               <button type="button" onClick={() => setDarkMode(!darkMode)} className="rounded-2xl border border-slate-200 bg-white p-3 transition hover:scale-105 dark:border-white/10 dark:bg-white/5" aria-label="Alternar tema">{darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}</button>
             </div>
-            <label className="mb-4 block">
-              <span className="mb-2 block text-xs font-bold uppercase tracking-[0.2em] text-slate-400">Usuário ou e-mail</span>
-              <div className="relative"><UserCog className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" /><input value={loginUser} onChange={(e) => setLoginUser(e.target.value)} className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-12 pr-4 outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10 text-slate-950 placeholder:text-slate-400 dark:border-white/10 dark:bg-white/5 dark:text-white dark:placeholder:text-slate-400" placeholder="Digite seu usuário ou e-mail" autoComplete="username" /></div>
-            </label>
-            <label className="mb-4 block">
-              <span className="mb-2 block text-xs font-bold uppercase tracking-[0.2em] text-slate-400">Senha</span>
-              <div className="relative"><KeyRound className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" /><input type={showPassword ? "text" : "password"} value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-12 pr-12 outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10 text-slate-950 placeholder:text-slate-400 dark:border-white/10 dark:bg-white/5 dark:text-white dark:placeholder:text-slate-400" placeholder="Digite sua senha" autoComplete="current-password" /><button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400" aria-label="Visualizar ou ocultar senha">{showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}</button></div>
-            </label>
-            {loginError && <div className="mb-4 rounded-2xl bg-red-500/10 p-4 text-sm font-semibold text-red-500">{loginError}</div>}
-            <button className="h-12 w-full rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 px-5 font-black text-white shadow-glow transition hover:scale-[1.01]">Entrar</button>
-            <p className="mt-5 text-center text-xs text-slate-500 dark:text-slate-400">Acesso protegido por perfil. Clientes bloqueados ou vencidos não acessam os módulos internos.</p>
-          </form>
+            <div className="mb-5 grid grid-cols-2 rounded-2xl bg-slate-100 p-1 dark:bg-white/10">
+              <button type="button" onClick={() => setMode("login")} className={cls("rounded-xl px-3 py-2 text-sm font-black", mode === "login" ? "bg-white text-slate-950 shadow dark:bg-slate-950 dark:text-white" : "text-slate-500 dark:text-slate-300")}>Entrar</button>
+              <button type="button" onClick={() => setMode("register")} className={cls("rounded-xl px-3 py-2 text-sm font-black", mode === "register" ? "bg-white text-slate-950 shadow dark:bg-slate-950 dark:text-white" : "text-slate-500 dark:text-slate-300")}>Criar conta</button>
+            </div>
+
+            {mode === "login" ? (
+              <form onSubmit={onSubmit}>
+                <label className="mb-4 block">
+                  <span className="mb-2 block text-xs font-bold uppercase tracking-[0.2em] text-slate-400">Nome, usuário ou e-mail</span>
+                  <div className="relative"><UserCog className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" /><input value={loginUser} onChange={(e) => setLoginUser(e.target.value)} className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-12 pr-4 outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10 text-slate-950 placeholder:text-slate-400 dark:border-white/10 dark:bg-white/5 dark:text-white dark:placeholder:text-slate-400" placeholder="Digite nome, usuário ou e-mail" autoComplete="username" /></div>
+                </label>
+                <label className="mb-4 block">
+                  <span className="mb-2 block text-xs font-bold uppercase tracking-[0.2em] text-slate-400">Senha</span>
+                  <div className="relative"><KeyRound className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" /><input type={showPassword ? "text" : "password"} value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-12 pr-12 outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10 text-slate-950 placeholder:text-slate-400 dark:border-white/10 dark:bg-white/5 dark:text-white dark:placeholder:text-slate-400" placeholder="Digite sua senha" autoComplete="current-password" /><button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400" aria-label="Visualizar ou ocultar senha">{showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}</button></div>
+                </label>
+                {loginError && <div className="mb-4 rounded-2xl bg-red-500/10 p-4 text-sm font-semibold text-red-500">{loginError}</div>}
+                {!stateLoaded && <div className="mb-4 rounded-2xl bg-amber-500/10 p-4 text-sm font-semibold text-amber-600 dark:text-amber-300">Carregando dados do banco...</div>}
+                <button disabled={!stateLoaded} className="h-12 w-full rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 px-5 font-black text-white shadow-glow transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60">Entrar</button>
+                <p className="mt-5 text-center text-xs text-slate-500 dark:text-slate-400">Você pode entrar pelo nome cadastrado, usuário ou e-mail em qualquer equipamento.</p>
+              </form>
+            ) : (
+              <form onSubmit={submitRegister} className="grid gap-3">
+                <Input name="name" label="Nome" placeholder="Seu nome" required />
+                <Input name="email" type="email" label="E-mail" placeholder="voce@email.com" required />
+                <Input name="phone" label="Telefone" placeholder="(00) 00000-0000" />
+                <Input name="password" type="password" label="Senha" placeholder="Mínimo 6 caracteres" required />
+                <Select name="planId" label="Plano" defaultValue={activePlans[0]?.id ?? "mensal"}>{activePlans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} - {money.format(plan.value)}</option>)}</Select>
+                {registerMessage && <div className="rounded-2xl bg-cyan-500/10 p-4 text-sm font-semibold text-cyan-700 dark:text-cyan-300">{registerMessage}</div>}
+                <button className="h-12 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 px-5 font-black text-white shadow-glow transition hover:scale-[1.01]">Criar conta e aguardar liberação</button>
+                <p className="text-center text-xs text-slate-500 dark:text-slate-400">O cadastro fica pendente até o administrador liberar o acesso.</p>
+              </form>
+            )}
+          </div>
         </motion.div>
       </div>
     </div>
@@ -1330,7 +1433,7 @@ function StatusPill({ status }: { status: ClientStatus | PaymentStatus }) {
   const map: Record<string, string> = { ativo: "bg-emerald-500/10 text-emerald-500", pago: "bg-emerald-500/10 text-emerald-500", bloqueado: "bg-red-500/10 text-red-500", vencido: "bg-amber-500/10 text-amber-500", pendente: "bg-amber-500/10 text-amber-500", cancelado: "bg-slate-500/10 text-slate-500" };
   return <span className={cls("inline-flex items-center justify-center rounded-full px-3 py-1 text-xs font-black uppercase", map[status])}>{status}</span>;
 }
-function PlanCard({ plan, setPlans }: { plan: Plan; setPlans: React.Dispatch<React.SetStateAction<Plan[]>> }) {
+function PlanCard({ plan, setPlans, setAccounts }: { plan: Plan; setPlans: React.Dispatch<React.SetStateAction<Plan[]>>; setAccounts: React.Dispatch<React.SetStateAction<Account[]>> }) {
   const [draft, setDraft] = useState<Plan>(plan);
   const [saved, setSaved] = useState(false);
   const hasChanges = JSON.stringify(draft) !== JSON.stringify(plan);
@@ -1349,6 +1452,7 @@ function PlanCard({ plan, setPlans }: { plan: Plan; setPlans: React.Dispatch<Rea
   function savePlan() {
     if (!canSave) return;
     setPlans((current) => current.map((item) => item.id === plan.id ? { ...item, ...draft } : item));
+    setAccounts((current) => current.map((account) => account.role === "CLIENTE" && account.planId === plan.id ? { ...account, planValue: draft.value, permissions: draft.permissions } : account));
     setSaved(true);
   }
 
@@ -1402,7 +1506,7 @@ function buildFinancialSummary(clients: Account[], plans: Plan[], payments: Paym
   const expired = clients.filter((client) => client.status === "vencido" || isExpired(client.dueDate)).length;
   const received = payments.filter((payment) => payment.status === "pago").reduce((sum, payment) => sum + payment.value, 0);
   const pending = payments.filter((payment) => ["pendente", "vencido"].includes(payment.status)).reduce((sum, payment) => sum + payment.value, 0);
-  const expected = clients.reduce((sum, client) => sum + (client.planValue ?? plans.find((plan) => plan.id === client.planId)?.value ?? 0), 0);
+  const expected = clients.reduce((sum, client) => sum + planValueFor(plans, client.planId), 0);
   return { active, blocked, expired, received, pending, expected };
 }
 function buildEquityCurve(lines: ReturnType<typeof analyzePortfolio>["lines"]) {
