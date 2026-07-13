@@ -68,6 +68,16 @@ export type Asset = {
   source: "local" | "external" | "generated";
   sourceLabel?: string;
   sourceUrl?: string;
+  providerTicker?: string;
+  marketStatus?: string;
+  dataStatus?: string;
+  isCached?: boolean;
+  lastUpdatedAt?: string;
+  consultedAt?: string;
+  previousClose?: number;
+  open?: number;
+  dayHigh?: number;
+  dayLow?: number;
 };
 
 export type PortfolioPosition = {
