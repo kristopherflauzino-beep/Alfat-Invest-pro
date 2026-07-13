@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { hasDatabaseUrl, prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
 
@@ -24,6 +24,22 @@ const defaultState: AppStatePayload = {
       status: "ativo",
       createdAt: new Date().toISOString().slice(0, 10),
       permissions: allClientModules
+    },
+    {
+      id: "client-tutu",
+      role: "CLIENTE",
+      username: "Tutu",
+      email: "arthurcruz@gmail.com",
+      name: "Tutu",
+      phone: "",
+      passwordHash: "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
+      planId: "semanal",
+      planValue: 9.9,
+      status: "ativo",
+      createdAt: new Date().toISOString().slice(0, 10),
+      dueDate: "2026-07-20",
+      notes: "Cliente preservado do cadastro existente.",
+      permissions: allClientModules
     }
   ],
   plans: [
@@ -35,10 +51,30 @@ const defaultState: AppStatePayload = {
   portfolio: []
 };
 
+function stringField(value: unknown, key: string) {
+  if (!value || typeof value !== "object") return "";
+  const field = (value as Record<string, unknown>)[key];
+  return typeof field === "string" ? field.toLowerCase() : "";
+}
+
+function mergeDefaultAccounts(accounts: unknown[]) {
+  const merged = [...accounts];
+  defaultState.accounts.forEach((defaultAccount) => {
+    const defaultId = stringField(defaultAccount, "id");
+    const defaultEmail = stringField(defaultAccount, "email");
+    const exists = merged.some((account) =>
+      stringField(account, "id") === defaultId ||
+      stringField(account, "email") === defaultEmail
+    );
+    if (!exists) merged.push(defaultAccount);
+  });
+  return merged;
+}
+
 function normalizeState(value: unknown): AppStatePayload {
   const input = value && typeof value === "object" ? value as Partial<AppStatePayload> : {};
   return {
-    accounts: Array.isArray(input.accounts) ? input.accounts : defaultState.accounts,
+    accounts: mergeDefaultAccounts(Array.isArray(input.accounts) ? input.accounts : []),
     plans: Array.isArray(input.plans) && input.plans.length > 0 ? input.plans : defaultState.plans,
     payments: Array.isArray(input.payments) ? input.payments : [],
     portfolio: Array.isArray(input.portfolio) ? input.portfolio : []
@@ -56,9 +92,14 @@ async function ensureTable() {
 async function readState() {
   await ensureTable();
   const rows = await prisma.$queryRaw<Array<{ value: unknown }>>`SELECT "value" FROM "PersistentAppState" WHERE "key" = 'default' LIMIT 1`;
-  if (rows[0]?.value) return normalizeState(rows[0].value);
-  await writeState(defaultState);
-  return defaultState;
+  if (rows[0]?.value) {
+    const state = normalizeState(rows[0].value);
+    if (JSON.stringify(state) !== JSON.stringify(rows[0].value)) await writeState(state);
+    return state;
+  }
+  const state = normalizeState(defaultState);
+  await writeState(state);
+  return state;
 }
 
 async function writeState(state: AppStatePayload) {
@@ -70,8 +111,8 @@ async function writeState(state: AppStatePayload) {
 }
 
 export async function GET() {
-  if (!process.env.DATABASE_URL) {
-    return NextResponse.json({ error: "Banco de dados não configurado. Configure DATABASE_URL na Vercel." }, { status: 503 });
+  if (!hasDatabaseUrl) {
+    return NextResponse.json({ error: "Banco de dados não configurado. Configure DATABASE_URL, POSTGRES_PRISMA_URL ou POSTGRES_URL na Vercel." }, { status: 503 });
   }
 
   try {
@@ -83,8 +124,8 @@ export async function GET() {
 }
 
 export async function PUT(request: Request) {
-  if (!process.env.DATABASE_URL) {
-    return NextResponse.json({ error: "Banco de dados não configurado. Configure DATABASE_URL na Vercel." }, { status: 503 });
+  if (!hasDatabaseUrl) {
+    return NextResponse.json({ error: "Banco de dados não configurado. Configure DATABASE_URL, POSTGRES_PRISMA_URL ou POSTGRES_URL na Vercel." }, { status: 503 });
   }
 
   try {

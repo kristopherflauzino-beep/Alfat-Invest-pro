@@ -424,6 +424,20 @@ async function sha256(value: string) {
   const digest = await crypto.subtle.digest("SHA-256", data);
   return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
+function passwordChecks(value: string) {
+  return [
+    { id: "length", label: "Mínimo 6 caracteres", valid: value.length >= 6 },
+    { id: "letters", label: "Letras", valid: /[A-Za-z]/.test(value) },
+    { id: "number", label: "Número", valid: /\d/.test(value) },
+    { id: "special", label: "Caractere especial", valid: /[^A-Za-z0-9]/.test(value) }
+  ];
+}
+function isStrongPassword(value: string) {
+  return passwordChecks(value).every((item) => item.valid);
+}
+function passwordRequirementMessage() {
+  return "A senha precisa ter mínimo de 6 caracteres, letras, número e caractere especial.";
+}
 function downloadText(filename: string, content: string, type = "text/plain;charset=utf-8") {
   const blob = new Blob([content], { type });
   const url = URL.createObjectURL(blob);
@@ -445,6 +459,8 @@ export default function AlfatecInvestPro() {
   const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState("");
   const [registerMessage, setRegisterMessage] = useState("");
+  const [newClientPassword, setNewClientPassword] = useState("Invest@123");
+  const [databaseError, setDatabaseError] = useState("");
   const [clientModule, setClientModule] = useState<ClientModuleId>("dashboard");
   const [adminModule, setAdminModule] = useState<ClientModuleId | AdminModuleId>("admin-dashboard");
   const [globalSearch, setGlobalSearch] = useState("");
@@ -489,6 +505,19 @@ export default function AlfatecInvestPro() {
       .map((item) => ({ ...item, group: "Administração" }))
   ], []);
 
+  function currentSnapshot(): AppStatePayload {
+    return { accounts, plans, payments, portfolio };
+  }
+
+  function localSnapshot(): AppStatePayload {
+    return {
+      accounts: normalizeAccounts(safeParse<Account[]>(window.localStorage.getItem("alfatec-users"), [])),
+      plans: normalizePlans(safeParse<Plan[]>(window.localStorage.getItem("alfatec-plans"), defaultPlans)),
+      payments: safeParse<Payment[]>(window.localStorage.getItem("alfatec-payments"), []),
+      portfolio: safeParse<PortfolioPosition[]>(window.localStorage.getItem("alfatec-portfolio"), starterPortfolio)
+    };
+  }
+
   async function persistAppState(snapshot: AppStatePayload) {
     const response = await fetch("/api/app-state", {
       method: "PUT",
@@ -499,6 +528,25 @@ export default function AlfatecInvestPro() {
       const data = await response.json().catch(() => ({}));
       throw new Error(data?.error ?? "Não foi possível salvar os dados no banco.");
     }
+    setDatabaseError("");
+  }
+
+  async function loadAppState(baseState: AppStatePayload) {
+    const response = await fetch("/api/app-state", { cache: "no-store" });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data?.error ?? "Banco de dados indisponível.");
+    }
+    const serverState = await response.json() as Partial<AppStatePayload>;
+    const merged = mergeAppState(serverState, baseState);
+    setAccounts(merged.accounts);
+    setPlans(merged.plans);
+    setPayments(merged.payments);
+    setPortfolio(merged.portfolio.length ? merged.portfolio : starterPortfolio);
+    setStateLoaded(true);
+    setDatabaseError("");
+    if (statesDiffer(merged, serverState)) void persistAppState(merged).catch((error) => setDatabaseError(error instanceof Error ? error.message : "Erro ao salvar no banco."));
+    return merged;
   }
 
   useEffect(() => {
@@ -507,34 +555,25 @@ export default function AlfatecInvestPro() {
     if (savedSession) setSessionId(savedSession);
     if (savedTheme) setDarkMode(savedTheme === "dark");
 
-    const localState: AppStatePayload = {
-      accounts: normalizeAccounts(safeParse<Account[]>(window.localStorage.getItem("alfatec-users"), [])),
-      plans: normalizePlans(safeParse<Plan[]>(window.localStorage.getItem("alfatec-plans"), defaultPlans)),
-      payments: safeParse<Payment[]>(window.localStorage.getItem("alfatec-payments"), []),
-      portfolio: safeParse<PortfolioPosition[]>(window.localStorage.getItem("alfatec-portfolio"), starterPortfolio)
-    };
-
     let cancelled = false;
     async function loadState() {
       try {
-        const response = await fetch("/api/app-state", { cache: "no-store" });
-        if (!response.ok) throw new Error("Banco indisponível");
-        const serverState = await response.json() as Partial<AppStatePayload>;
-        const merged = mergeAppState(serverState, localState);
+        const merged = await loadAppState(localSnapshot());
         if (cancelled) return;
         setAccounts(merged.accounts);
         setPlans(merged.plans);
         setPayments(merged.payments);
         setPortfolio(merged.portfolio.length ? merged.portfolio : starterPortfolio);
-        setStateLoaded(true);
-        if (statesDiffer(merged, serverState)) void persistAppState(merged).catch(console.error);
       } catch (error) {
-        console.error("Usando dados locais porque o banco não respondeu", error);
+        const message = error instanceof Error ? error.message : "Banco de dados indisponível.";
+        console.error("Banco de dados indisponível", error);
         if (cancelled) return;
+        const localState = localSnapshot();
         setAccounts(localState.accounts);
         setPlans(localState.plans);
         setPayments(localState.payments);
         setPortfolio(localState.portfolio.length ? localState.portfolio : starterPortfolio);
+        setDatabaseError(message);
         setStateLoaded(true);
       }
     }
@@ -546,7 +585,9 @@ export default function AlfatecInvestPro() {
   useEffect(() => {
     if (!stateLoaded) return;
     const snapshot: AppStatePayload = { accounts, plans, payments, portfolio };
-    const timeout = window.setTimeout(() => { void persistAppState(snapshot).catch(console.error); }, 500);
+    const timeout = window.setTimeout(() => {
+      void persistAppState(snapshot).catch((error) => setDatabaseError(error instanceof Error ? error.message : "Erro ao salvar no banco."));
+    }, 500);
     return () => window.clearTimeout(timeout);
   }, [stateLoaded, accounts, plans, payments, portfolio]);
 
@@ -606,12 +647,18 @@ export default function AlfatecInvestPro() {
       setLoginError("Informe nome, usuário/e-mail e senha.");
       return;
     }
-    if (!stateLoaded) {
-      setLoginError("Carregando dados do banco. Tente novamente em alguns segundos.");
+    let loginAccounts = accounts;
+    try {
+      const latest = await loadAppState(currentSnapshot());
+      loginAccounts = latest.accounts;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Banco de dados indisponível.";
+      setDatabaseError(message);
+      setLoginError(message + " Verifique a configuração do banco antes de acessar em outro equipamento.");
       return;
     }
     const hash = await sha256(loginPassword);
-    const found = accounts.find((account) => {
+    const found = loginAccounts.find((account) => {
       const identifiers = [account.username, account.email, account.name].map((value) => value.toLowerCase());
       return identifiers.includes(cleanUser) && account.passwordHash === hash;
     });
@@ -639,8 +686,12 @@ export default function AlfatecInvestPro() {
     const email = payload.email.trim().toLowerCase();
     const phone = payload.phone.trim();
     const plan = plans.find((item) => item.id === payload.planId) ?? plans[1];
-    if (!name || !email || payload.password.length < 6) {
-      setRegisterMessage("Informe nome, e-mail e senha com pelo menos 6 caracteres.");
+    if (!name || !email) {
+      setRegisterMessage("Informe nome e e-mail.");
+      return;
+    }
+    if (!isStrongPassword(payload.password)) {
+      setRegisterMessage(passwordRequirementMessage());
       return;
     }
     const exists = accounts.some((account) => account.email.toLowerCase() === email || account.username.toLowerCase() === email || account.name.toLowerCase() === name.toLowerCase());
@@ -713,7 +764,11 @@ export default function AlfatecInvestPro() {
     const formData = new FormData(event.currentTarget);
     const planId = String(formData.get("planId") ?? "mensal");
     const plan = plans.find((item) => item.id === planId) ?? plans[1];
-    const password = String(formData.get("password") ?? "123456");
+    const password = String(formData.get("password") ?? "Invest@123");
+    if (!isStrongPassword(password)) {
+      alert(passwordRequirementMessage());
+      return;
+    }
     const client: Account = {
       id: crypto.randomUUID(),
       role: "CLIENTE",
@@ -733,6 +788,7 @@ export default function AlfatecInvestPro() {
     if (!client.name || !client.email) return;
     setAccounts((current) => [client, ...current]);
     setSelectedClientId(client.id);
+    setNewClientPassword("Invest@123");
     event.currentTarget.reset();
   }
 
@@ -776,8 +832,8 @@ export default function AlfatecInvestPro() {
     const current = String(formData.get("currentPassword") ?? "");
     const next = String(formData.get("newPassword") ?? "");
     const confirm = String(formData.get("confirmPassword") ?? "");
-    if (next.length < 6 || next !== confirm) {
-      alert("A nova senha deve ter ao menos 6 caracteres e a confirmação deve ser igual.");
+    if (!isStrongPassword(next) || next !== confirm) {
+      alert(next !== confirm ? "A confirmação deve ser igual à nova senha." : passwordRequirementMessage());
       return;
     }
     const currentHash = await sha256(current);
@@ -839,7 +895,7 @@ export default function AlfatecInvestPro() {
   if (!currentUser) {
     return (
       <main className={cls("min-h-screen transition-colors", darkMode ? "dark bg-[#020817] text-slate-100" : "bg-slate-100 text-slate-950")}>
-        <LoginScreen darkMode={darkMode} setDarkMode={setDarkMode} loginUser={loginUser} setLoginUser={setLoginUser} loginPassword={loginPassword} setLoginPassword={setLoginPassword} showPassword={showPassword} setShowPassword={setShowPassword} loginError={loginError} registerMessage={registerMessage} plans={plans} stateLoaded={stateLoaded} onSubmit={handleLogin} onRegister={requestAccount} />
+        <LoginScreen darkMode={darkMode} setDarkMode={setDarkMode} loginUser={loginUser} setLoginUser={setLoginUser} loginPassword={loginPassword} setLoginPassword={setLoginPassword} showPassword={showPassword} setShowPassword={setShowPassword} loginError={loginError} registerMessage={registerMessage} databaseError={databaseError} plans={plans} stateLoaded={stateLoaded} onSubmit={handleLogin} onRegister={requestAccount} />
       </main>
     );
   }
@@ -891,7 +947,7 @@ export default function AlfatecInvestPro() {
                   <Input name="name" label="Nome" placeholder="Nome do cliente" required />
                   <Input name="email" type="email" label="E-mail / usuário" placeholder="cliente@email.com" required />
                   <Input name="phone" label="Telefone" placeholder="(00) 00000-0000" />
-                  <Input name="password" label="Senha inicial" placeholder="Senha inicial" defaultValue="123456" required />
+                  <PasswordInputWithRules label="Senha inicial" name="password" value={newClientPassword} onChange={setNewClientPassword} placeholder="Crie uma senha segura" autoComplete="new-password" />
                   <Select name="planId" label="Plano" defaultValue="mensal">{plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} - {money.format(plan.value)}</option>)}</Select>
                   <Input name="dueDate" type="date" label="Vencimento" />
                   <Input name="notes" label="Observações" placeholder="Observações internas" />
@@ -1241,8 +1297,9 @@ function Shell({ darkMode, setDarkMode, logout, user, modules, activeId, onMenu,
   );
 }
 
-function LoginScreen({ darkMode, setDarkMode, loginUser, setLoginUser, loginPassword, setLoginPassword, showPassword, setShowPassword, loginError, registerMessage, plans, stateLoaded, onSubmit, onRegister }: { darkMode: boolean; setDarkMode: (value: boolean) => void; loginUser: string; setLoginUser: (value: string) => void; loginPassword: string; setLoginPassword: (value: string) => void; showPassword: boolean; setShowPassword: (value: boolean) => void; loginError: string; registerMessage: string; plans: Plan[]; stateLoaded: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onRegister: (payload: { name: string; email: string; phone: string; password: string; planId: string }) => void }) {
+function LoginScreen({ darkMode, setDarkMode, loginUser, setLoginUser, loginPassword, setLoginPassword, showPassword, setShowPassword, loginError, registerMessage, databaseError, plans, stateLoaded, onSubmit, onRegister }: { darkMode: boolean; setDarkMode: (value: boolean) => void; loginUser: string; setLoginUser: (value: string) => void; loginPassword: string; setLoginPassword: (value: string) => void; showPassword: boolean; setShowPassword: (value: boolean) => void; loginError: string; registerMessage: string; databaseError: string; plans: Plan[]; stateLoaded: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onRegister: (payload: { name: string; email: string; phone: string; password: string; planId: string }) => void }) {
   const [mode, setMode] = useState<"login" | "register">("login");
+  const [registerPassword, setRegisterPassword] = useState("");
   const activePlans = plans.filter((plan) => plan.status === "ativo");
 
   function submitRegister(event: React.FormEvent<HTMLFormElement>) {
@@ -1252,7 +1309,7 @@ function LoginScreen({ darkMode, setDarkMode, loginUser, setLoginUser, loginPass
       name: String(formData.get("name") ?? ""),
       email: String(formData.get("email") ?? ""),
       phone: String(formData.get("phone") ?? ""),
-      password: String(formData.get("password") ?? ""),
+      password: registerPassword,
       planId: String(formData.get("planId") ?? activePlans[0]?.id ?? "mensal")
     });
   }
@@ -1299,7 +1356,8 @@ function LoginScreen({ darkMode, setDarkMode, loginUser, setLoginUser, loginPass
                 </label>
                 {loginError && <div className="mb-4 rounded-2xl bg-red-500/10 p-4 text-sm font-semibold text-red-500">{loginError}</div>}
                 {!stateLoaded && <div className="mb-4 rounded-2xl bg-amber-500/10 p-4 text-sm font-semibold text-amber-600 dark:text-amber-300">Carregando dados do banco...</div>}
-                <button disabled={!stateLoaded} className="h-12 w-full rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 px-5 font-black text-white shadow-glow transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60">Entrar</button>
+                {databaseError && <div className="mb-4 rounded-2xl bg-amber-500/10 p-4 text-sm font-semibold text-amber-700 dark:text-amber-300">{databaseError}</div>}
+                <button disabled={!stateLoaded || Boolean(databaseError)} className="h-12 w-full rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 px-5 font-black text-white shadow-glow transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60">Entrar</button>
                 <p className="mt-5 text-center text-xs text-slate-500 dark:text-slate-400">Você pode entrar pelo nome cadastrado, usuário ou e-mail em qualquer equipamento.</p>
               </form>
             ) : (
@@ -1307,10 +1365,11 @@ function LoginScreen({ darkMode, setDarkMode, loginUser, setLoginUser, loginPass
                 <Input name="name" label="Nome" placeholder="Seu nome" required />
                 <Input name="email" type="email" label="E-mail" placeholder="voce@email.com" required />
                 <Input name="phone" label="Telefone" placeholder="(00) 00000-0000" />
-                <Input name="password" type="password" label="Senha" placeholder="Mínimo 6 caracteres" required />
+                <PasswordInputWithRules label="Senha" name="password" value={registerPassword} onChange={setRegisterPassword} placeholder="Crie uma senha segura" autoComplete="new-password" />
                 <Select name="planId" label="Plano" defaultValue={activePlans[0]?.id ?? "mensal"}>{activePlans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} - {money.format(plan.value)}</option>)}</Select>
                 {registerMessage && <div className="rounded-2xl bg-cyan-500/10 p-4 text-sm font-semibold text-cyan-700 dark:text-cyan-300">{registerMessage}</div>}
-                <button className="h-12 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 px-5 font-black text-white shadow-glow transition hover:scale-[1.01]">Criar conta e aguardar liberação</button>
+                {databaseError && <div className="rounded-2xl bg-amber-500/10 p-4 text-sm font-semibold text-amber-700 dark:text-amber-300">{databaseError}</div>}
+                <button disabled={Boolean(databaseError)} className="h-12 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 px-5 font-black text-white shadow-glow transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60">Criar conta e aguardar liberação</button>
                 <p className="text-center text-xs text-slate-500 dark:text-slate-400">O cadastro fica pendente até o administrador liberar o acesso.</p>
               </form>
             )}
@@ -1400,6 +1459,13 @@ function ComparisonTable({ a, b }: { a: Asset; b: Asset }) {
     ["Risco", a.risk, b.risk]
   ];
   return <div className="mt-5 overflow-hidden rounded-3xl border border-slate-200 text-sm dark:border-white/10"><div className="grid grid-cols-3 bg-slate-50 p-3 font-bold dark:bg-white/5"><span>Indicador</span><span>{a.ticker}</span><span>{b.ticker}</span></div>{rows.map((row) => <div key={row[0]} className="grid grid-cols-3 border-t border-slate-100 p-3 dark:border-white/10"><span className="text-slate-500 dark:text-slate-300">{row[0]}</span><strong>{row[1]}</strong><strong>{row[2]}</strong></div>)}</div>;
+}
+function PasswordRequirementList({ value }: { value: string }) {
+  return <div className="mt-3 grid gap-2 text-sm text-slate-500 dark:text-slate-400">{passwordChecks(value).map((item) => <div key={item.id} className={cls("flex items-center gap-2", item.valid && "text-emerald-500")}><span className={cls("grid h-5 w-5 place-items-center rounded-full border", item.valid ? "border-emerald-500 bg-emerald-500 text-white" : "border-slate-400")}>{item.valid && <CheckCircle2 className="h-3.5 w-3.5" />}</span><span>{item.label}</span></div>)}</div>;
+}
+function PasswordInputWithRules({ label, name, value, onChange, placeholder, autoComplete }: { label: string; name: string; value: string; onChange: (value: string) => void; placeholder?: string; autoComplete?: string }) {
+  const [visible, setVisible] = useState(false);
+  return <label className="block"><span className="mb-2 block text-xs font-bold uppercase tracking-[0.2em] text-slate-400">{label}</span><div className="flex overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-white/10 dark:bg-white/5"><input name={name} type={visible ? "text" : "password"} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} autoComplete={autoComplete} className="h-12 min-w-0 flex-1 bg-transparent px-4 outline-none text-slate-950 placeholder:text-slate-400 dark:text-white dark:placeholder:text-slate-400" /><button type="button" onClick={() => setVisible(!visible)} className="border-l border-slate-200 px-4 text-sm font-black text-slate-600 dark:border-white/10 dark:text-slate-200">{visible ? "Ocultar" : "Mostrar"}</button></div><PasswordRequirementList value={value} /></label>;
 }
 function Input(props: React.InputHTMLAttributes<HTMLInputElement> & { label: string }) {
   const { label, className, ...rest } = props;
@@ -1495,7 +1561,46 @@ function PieBlock({ data }: { data: Array<{ name: string; value: number }> }) {
   return <div className="h-80"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={data} dataKey="value" nameKey="name" innerRadius={65} outerRadius={110} paddingAngle={3}>{data.map((entry, index) => <Cell key={entry.name} fill={palette[index % palette.length]} />)}</Pie><Tooltip formatter={(value) => money.format(Number(value))} /><Legend /></PieChart></ResponsiveContainer></div>;
 }
 function SettingsSection({ currentUser, darkMode, setDarkMode, settings, setSettings, changePassword, logout }: { currentUser: Account; darkMode: boolean; setDarkMode: (value: boolean) => void; settings: { currency: string; language: string; autoUpdate: boolean; priceAlerts: boolean; dividendAlerts: boolean }; setSettings: React.Dispatch<React.SetStateAction<{ currency: string; language: string; autoUpdate: boolean; priceAlerts: boolean; dividendAlerts: boolean }>>; changePassword: (event: React.FormEvent<HTMLFormElement>) => void; logout: () => void }) {
-  return <Section title="Configurações" subtitle="Conta, senha, tema, alertas e preferências." eyebrow="Preferências"><div className="grid gap-6 lg:grid-cols-2"><PremiumCard title="Dados da conta" description="Informações do usuário autenticado." icon={UserCog}><InfoTile label="Nome" value={currentUser.name} /><div className="mt-3"><InfoTile label="Perfil" value={currentUser.role === "ADMIN" ? "Administrador" : "Cliente"} /></div><div className="mt-3"><InfoTile label="Status" value={currentUser.status} /></div><button onClick={logout} className="mt-4 rounded-2xl bg-red-500 px-5 py-3 font-bold text-white"><LogOut className="mr-2 inline h-4 w-4" />Sair da conta</button></PremiumCard><PremiumCard title="Alterar senha" description="A senha é armazenada como hash SHA-256 nesta versão local." icon={KeyRound}><form onSubmit={changePassword} className="grid gap-3"><Input name="currentPassword" type="password" label="Senha atual" required /><Input name="newPassword" type="password" label="Nova senha" required /><Input name="confirmPassword" type="password" label="Confirmar nova senha" required /><button className="rounded-2xl bg-cyan-500 px-5 py-3 font-bold text-white">Alterar senha</button></form></PremiumCard><PremiumCard title="Tema e visual" description="Modo claro/escuro aplicado em toda a plataforma." icon={Moon}><Toggle label="Modo escuro" checked={darkMode} onChange={setDarkMode} /><Toggle label="Atualização automática" checked={settings.autoUpdate} onChange={(value) => setSettings((current) => ({ ...current, autoUpdate: value }))} /><Toggle label="Alertas de preço" checked={settings.priceAlerts} onChange={(value) => setSettings((current) => ({ ...current, priceAlerts: value }))} /><Toggle label="Alertas de dividendos" checked={settings.dividendAlerts} onChange={(value) => setSettings((current) => ({ ...current, dividendAlerts: value }))} /></PremiumCard><PremiumCard title="Localização" description="Moeda e idioma da interface." icon={Settings}><Select label="Moeda" value={settings.currency} onChange={(e) => setSettings((current) => ({ ...current, currency: e.target.value }))}><option value="BRL">Real brasileiro</option><option value="USD">Dólar americano</option></Select><div className="mt-3"><Select label="Idioma" value={settings.language} onChange={(e) => setSettings((current) => ({ ...current, language: e.target.value }))}><option value="pt-BR">Português Brasil</option><option value="en-US">English</option></Select></div></PremiumCard></div></Section>;
+  const [newPassword, setNewPassword] = useState("");
+
+  return (
+    <Section title="Configurações" subtitle="Conta, senha, tema, alertas e preferências." eyebrow="Preferências">
+      <div className="grid gap-6 lg:grid-cols-2">
+        <PremiumCard title="Dados da conta" description="Informações do usuário autenticado." icon={UserCog}>
+          <InfoTile label="Nome" value={currentUser.name} />
+          <div className="mt-3"><InfoTile label="Perfil" value={currentUser.role === "ADMIN" ? "Administrador" : "Cliente"} /></div>
+          <div className="mt-3"><InfoTile label="Status" value={currentUser.status} /></div>
+          <button onClick={logout} className="mt-4 rounded-2xl bg-red-500 px-5 py-3 font-bold text-white"><LogOut className="mr-2 inline h-4 w-4" />Sair da conta</button>
+        </PremiumCard>
+        <PremiumCard title="Alterar senha" description="A nova senha precisa cumprir todos os requisitos de segurança." icon={KeyRound}>
+          <form onSubmit={changePassword} className="grid gap-3">
+            <Input name="currentPassword" type="password" label="Senha atual" required />
+            <PasswordInputWithRules label="Nova senha" name="newPassword" value={newPassword} onChange={setNewPassword} placeholder="Crie uma senha segura" autoComplete="new-password" />
+            <Input name="confirmPassword" type="password" label="Confirmar nova senha" required />
+            <button className="rounded-2xl bg-cyan-500 px-5 py-3 font-bold text-white">Alterar senha</button>
+          </form>
+        </PremiumCard>
+        <PremiumCard title="Tema e visual" description="Modo claro/escuro aplicado em toda a plataforma." icon={Moon}>
+          <Toggle label="Modo escuro" checked={darkMode} onChange={setDarkMode} />
+          <Toggle label="Atualização automática" checked={settings.autoUpdate} onChange={(value) => setSettings((current) => ({ ...current, autoUpdate: value }))} />
+          <Toggle label="Alertas de preço" checked={settings.priceAlerts} onChange={(value) => setSettings((current) => ({ ...current, priceAlerts: value }))} />
+          <Toggle label="Alertas de dividendos" checked={settings.dividendAlerts} onChange={(value) => setSettings((current) => ({ ...current, dividendAlerts: value }))} />
+        </PremiumCard>
+        <PremiumCard title="Localização" description="Moeda e idioma da interface." icon={Settings}>
+          <Select label="Moeda" value={settings.currency} onChange={(e) => setSettings((current) => ({ ...current, currency: e.target.value }))}>
+            <option value="BRL">Real brasileiro</option>
+            <option value="USD">Dólar americano</option>
+          </Select>
+          <div className="mt-3">
+            <Select label="Idioma" value={settings.language} onChange={(e) => setSettings((current) => ({ ...current, language: e.target.value }))}>
+              <option value="pt-BR">Português Brasil</option>
+              <option value="en-US">English</option>
+            </Select>
+          </div>
+        </PremiumCard>
+      </div>
+    </Section>
+  );
 }
 function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
   return <button onClick={() => onChange(!checked)} className="mb-3 flex w-full items-center justify-between rounded-2xl bg-slate-50 p-4 text-left dark:bg-white/5"><span className="font-semibold">{label}</span><span className={cls("h-7 w-12 rounded-full p-1 transition", checked ? "bg-cyan-500" : "bg-slate-300")}><span className={cls("block h-5 w-5 rounded-full bg-white transition", checked && "translate-x-5")} /></span></button>;
