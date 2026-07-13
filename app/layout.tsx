@@ -5,7 +5,10 @@ export const metadata: Metadata = {
   title: "ALFATEC INVEST PRO",
   description: "Plataforma premium para análise de ações, FIIs, ETFs, BDRs, cripto e carteira de investimentos.",
   icons: {
-    icon: "/favicon.ico",
+    icon: [
+      { url: "/favicon.ico", type: "image/x-icon" },
+      { url: "/icon.png", type: "image/png", sizes: "512x512" }
+    ],
     shortcut: "/favicon.ico",
     apple: "/apple-icon.png"
   }
