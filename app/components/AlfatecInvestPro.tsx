@@ -216,6 +216,11 @@ function dividendPerShare(asset: Asset) {
   if (dy <= 0 || asset.type === "CRIPTO") return undefined;
   return (asset.price * (dy / 100)) / dividendPaymentsPerYear(asset);
 }
+function annualDividendPerShare(asset: Asset) {
+  const dy = asset.metrics.dividendYield ?? 0;
+  if (dy <= 0 || asset.type === "CRIPTO") return undefined;
+  return asset.price * (dy / 100);
+}
 function comparisonScore(asset: Asset, rangeReturn: number, weights: RadarWeights) {
   const radar = calculateAssetScore(asset, weights);
   const momentum = Math.max(0, Math.min(100, 50 + rangeReturn));
@@ -366,6 +371,7 @@ export default function AlfatecInvestPro() {
 
   const assets = useMemo(() => buildAssetMap(extraAssets), [extraAssets]);
   const portfolioAnalysis = useMemo(() => analyzePortfolio(portfolio, assets), [portfolio, assets]);
+  const portfolioDividendCycle = useMemo(() => portfolioAnalysis.lines.reduce((sum, line) => sum + (dividendPerShare(line.asset) ?? 0) * line.quantity, 0), [portfolioAnalysis.lines]);
   const marketResults = useMemo(() => searchAssets(marketSearch, marketType, assets, { includeDynamic: false }), [marketSearch, marketType, assets]);
   const rankedAssets = useMemo(() => [...assets].map((asset) => ({ ...asset, score: calculateAssetScore(asset, weights) })).sort((a, b) => b.score - a.score), [assets, weights]);
   const currentUser = useMemo(() => accounts.find((account) => account.id === sessionId) ?? null, [accounts, sessionId]);
@@ -906,12 +912,17 @@ export default function AlfatecInvestPro() {
 
         {clientModule === "carteira" && (
           <Section title="Minha Carteira" subtitle="Cadastre ativos e acompanhe lucro, prejuízo, dividendos e concentração." eyebrow="Controle do usuário">
+            <div className="mb-6 grid gap-4 sm:grid-cols-3">
+              <InfoTile label="Dividendos por ciclo" value={money.format(portfolioDividendCycle)} />
+              <InfoTile label="Dividendos/mês" value={money.format(portfolioAnalysis.projectedDividendsMonth)} />
+              <InfoTile label="Dividendos/ano" value={money.format(portfolioAnalysis.projectedDividendsYear)} />
+            </div>
             <div className="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
               <PremiumCard title="Adicionar ativo" description="Ticker, quantidade, preço médio, corretora e data." icon={Plus}>
                 <form onSubmit={addPortfolioPosition} className="grid gap-3"><Input name="ticker" label="Ticker" placeholder="GARE11" required /><Input name="quantity" type="number" step="0.01" label="Quantidade" required /><Input name="averagePrice" type="number" step="0.01" label="Preço médio" required /><Input name="broker" label="Corretora" placeholder="XP, Rico, BTG..." /><Input name="purchaseDate" type="date" label="Data da compra" /><button className="rounded-2xl bg-teal-500 px-4 py-3 font-bold text-white">Adicionar à carteira</button></form>
               </PremiumCard>
               <PremiumCard title="Posições" description="Análise automática das posições cadastradas." icon={WalletCards}>
-                <div className="overflow-x-auto"><table className="min-w-full text-sm"><thead><tr className="text-left text-slate-500"><th className="p-3">Ativo</th><th className="p-3">Qtd.</th><th className="p-3">Preço médio</th><th className="p-3">Atual</th><th className="p-3">Lucro/Prejuízo</th><th className="p-3">Peso</th><th className="p-3"></th></tr></thead><tbody>{portfolioAnalysis.lines.map((line) => <tr key={line.id} className="border-t border-slate-100 dark:border-white/10"><td className="p-3 font-black">{line.ticker}<p className="text-xs font-normal text-slate-500">{typeLabels[line.asset.type]}</p></td><td className="p-3">{line.quantity}</td><td className="p-3">{money.format(line.averagePrice)}</td><td className="p-3">{money.format(line.asset.price)}</td><td className={cls("p-3 font-black", line.profit >= 0 ? "text-emerald-500" : "text-red-500")}>{money.format(line.profit)}<p className="text-xs">{pct(line.profitability)}</p></td><td className="p-3">{pct(line.weight)}</td><td className="p-3"><button onClick={() => setPortfolio((current) => current.filter((item) => item.id !== line.id))} className="rounded-xl bg-red-500/10 p-2 text-red-500"><Trash2 className="h-4 w-4" /></button></td></tr>)}</tbody></table></div>
+                <div className="overflow-x-auto"><table className="min-w-full text-sm"><thead><tr className="text-left text-slate-500 dark:text-slate-300"><th className="p-3">Ativo</th><th className="p-3">Qtd.</th><th className="p-3">Preço médio</th><th className="p-3">Atual</th><th className="p-3">Lucro/Prejuízo</th><th className="p-3">Div./ação</th><th className="p-3">Freq.</th><th className="p-3">A receber</th><th className="p-3">Peso</th><th className="p-3"></th></tr></thead><tbody>{portfolioAnalysis.lines.map((line) => { const dividend = dividendPerShare(line.asset); const totalDividend = dividend === undefined ? undefined : dividend * line.quantity; return <tr key={line.id} className="border-t border-slate-100 dark:border-white/10"><td className="p-3 font-black">{line.ticker}<p className="text-xs font-normal text-slate-500 dark:text-slate-300">{typeLabels[line.asset.type]}</p></td><td className="p-3">{line.quantity}</td><td className="p-3">{money.format(line.averagePrice)}</td><td className="p-3">{money.format(line.asset.price)}</td><td className={cls("p-3 font-black", line.profit >= 0 ? "text-emerald-500" : "text-red-500")}>{money.format(line.profit)}<p className="text-xs">{pct(line.profitability)}</p></td><td className="p-3 font-semibold">{dividend === undefined ? "-" : money.format(dividend)}</td><td className="p-3">{dividendFrequency(line.asset)}</td><td className="p-3 font-black text-cyan-600 dark:text-cyan-300">{totalDividend === undefined ? "-" : money.format(totalDividend)}</td><td className="p-3">{pct(line.weight)}</td><td className="p-3"><button onClick={() => setPortfolio((current) => current.filter((item) => item.id !== line.id))} className="rounded-xl bg-red-500/10 p-2 text-red-500"><Trash2 className="h-4 w-4" /></button></td></tr>; })}</tbody></table></div>
               </PremiumCard>
             </div>
             <div className="mt-6 grid gap-6 lg:grid-cols-2"><PremiumCard title="Análise IA da carteira" description="Diversificação, concentração, risco e dividendos." icon={BrainCircuit}><ul className="space-y-2">{portfolioAnalysis.aiSummary.map((item) => <li key={item} className="flex gap-2 text-sm"><ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-teal-500" />{item}</li>)}</ul></PremiumCard><PremiumCard title="Alertas automatizados" description="Condições de risco e concentração." icon={AlertTriangle}><ul className="space-y-2">{portfolioAnalysis.alerts.map((item) => <li key={item} className="flex gap-2 text-sm"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />{item}</li>)}</ul></PremiumCard></div>
@@ -1162,8 +1173,26 @@ function ComparisonRecommendationCard({ recommendation, a, b, returnA, returnB }
   );
 }
 function ComparisonTable({ a, b }: { a: Asset; b: Asset }) {
-  const rows = [["Preço", money.format(a.price), money.format(b.price)], ["Dividend Yield", pct(a.metrics.dividendYield), pct(b.metrics.dividendYield)], ["P/L", metric(a.metrics.pl), metric(b.metrics.pl)], ["P/VP", metric(a.metrics.pvp), metric(b.metrics.pvp)], ["ROE", pct(a.metrics.roe), pct(b.metrics.roe)], ["CAGR", pct(a.metrics.cagr), pct(b.metrics.cagr)], ["Volatilidade", pct(a.metrics.volatility), pct(b.metrics.volatility)], ["Drawdown", pct(a.metrics.drawdown), pct(b.metrics.drawdown)], ["Liquidez", compactMoney.format(a.liquidity), compactMoney.format(b.liquidity)], ["Risco", a.risk, b.risk]];
-  return <div className="mt-5 overflow-hidden rounded-3xl border border-slate-200 text-sm dark:border-white/10"><div className="grid grid-cols-3 bg-slate-50 p-3 font-bold dark:bg-white/5"><span>Indicador</span><span>{a.ticker}</span><span>{b.ticker}</span></div>{rows.map((row) => <div key={row[0]} className="grid grid-cols-3 border-t border-slate-100 p-3 dark:border-white/10"><span className="text-slate-500">{row[0]}</span><strong>{row[1]}</strong><strong>{row[2]}</strong></div>)}</div>;
+  const dividendA = dividendPerShare(a);
+  const dividendB = dividendPerShare(b);
+  const annualDividendA = annualDividendPerShare(a);
+  const annualDividendB = annualDividendPerShare(b);
+  const rows = [
+    ["Preço", money.format(a.price), money.format(b.price)],
+    ["Dividend Yield", pct(a.metrics.dividendYield), pct(b.metrics.dividendYield)],
+    ["Frequência dos dividendos", dividendFrequency(a), dividendFrequency(b)],
+    ["Dividendo por ação/cota", dividendA === undefined ? "-" : money.format(dividendA), dividendB === undefined ? "-" : money.format(dividendB)],
+    ["Dividendo anual por ação/cota", annualDividendA === undefined ? "-" : money.format(annualDividendA), annualDividendB === undefined ? "-" : money.format(annualDividendB)],
+    ["P/L", metric(a.metrics.pl), metric(b.metrics.pl)],
+    ["P/VP", metric(a.metrics.pvp), metric(b.metrics.pvp)],
+    ["ROE", pct(a.metrics.roe), pct(b.metrics.roe)],
+    ["CAGR", pct(a.metrics.cagr), pct(b.metrics.cagr)],
+    ["Volatilidade", pct(a.metrics.volatility), pct(b.metrics.volatility)],
+    ["Drawdown", pct(a.metrics.drawdown), pct(b.metrics.drawdown)],
+    ["Liquidez", compactMoney.format(a.liquidity), compactMoney.format(b.liquidity)],
+    ["Risco", a.risk, b.risk]
+  ];
+  return <div className="mt-5 overflow-hidden rounded-3xl border border-slate-200 text-sm dark:border-white/10"><div className="grid grid-cols-3 bg-slate-50 p-3 font-bold dark:bg-white/5"><span>Indicador</span><span>{a.ticker}</span><span>{b.ticker}</span></div>{rows.map((row) => <div key={row[0]} className="grid grid-cols-3 border-t border-slate-100 p-3 dark:border-white/10"><span className="text-slate-500 dark:text-slate-300">{row[0]}</span><strong>{row[1]}</strong><strong>{row[2]}</strong></div>)}</div>;
 }
 function Input(props: React.InputHTMLAttributes<HTMLInputElement> & { label: string }) {
   const { label, className, ...rest } = props;
