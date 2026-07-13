@@ -195,6 +195,46 @@ function metric(value?: number, suffix = "") {
   if (value === undefined || Number.isNaN(value)) return "-";
   return `${number.format(Number(value.toFixed(value > 1000 ? 0 : 2)))}${suffix}`;
 }
+function dividendFrequency(asset: Asset) {
+  const dy = asset.metrics.dividendYield ?? 0;
+  if (dy <= 0 || asset.type === "CRIPTO") return "Sem recorrência";
+  if (asset.type === "FII") return "Mensal";
+  if (asset.type === "ETF") return "Semestral";
+  if (asset.type === "BDR") return "Trimestral";
+  if (asset.tags.includes("dividendos") || asset.tags.includes("renda") || asset.tags.includes("defensiva")) return "Trimestral";
+  return "Eventual";
+}
+function dividendPaymentsPerYear(asset: Asset) {
+  const frequency = dividendFrequency(asset);
+  if (frequency === "Mensal") return 12;
+  if (frequency === "Trimestral") return 4;
+  if (frequency === "Semestral") return 2;
+  return 1;
+}
+function dividendPerShare(asset: Asset) {
+  const dy = asset.metrics.dividendYield ?? 0;
+  if (dy <= 0 || asset.type === "CRIPTO") return undefined;
+  return (asset.price * (dy / 100)) / dividendPaymentsPerYear(asset);
+}
+function comparisonScore(asset: Asset, rangeReturn: number, weights: RadarWeights) {
+  const radar = calculateAssetScore(asset, weights);
+  const momentum = Math.max(0, Math.min(100, 50 + rangeReturn));
+  return Math.round(radar * 0.72 + momentum * 0.28);
+}
+function buildComparisonRecommendation(a: Asset, b: Asset, returnA: number, returnB: number, weights: RadarWeights) {
+  const scoreA = comparisonScore(a, returnA, weights);
+  const scoreB = comparisonScore(b, returnB, weights);
+  const winner = scoreA >= scoreB ? a : b;
+  const loser = scoreA >= scoreB ? b : a;
+  const winnerReturn = scoreA >= scoreB ? returnA : returnB;
+  const loserReturn = scoreA >= scoreB ? returnB : returnA;
+  const reasons = [
+    `Score combinado: ${winner.ticker} ${scoreA >= scoreB ? scoreA : scoreB}/100 contra ${scoreA >= scoreB ? scoreB : scoreA}/100.`,
+    `Retorno no período selecionado: ${pct(winnerReturn)} contra ${pct(loserReturn)}.`,
+    `Dividend yield: ${pct(winner.metrics.dividendYield)} e risco ${winner.risk.toLowerCase()}.`
+  ];
+  return { winner, loser, scoreA, scoreB, reasons };
+}
 function addDays(days: number) {
   const date = new Date();
   date.setDate(date.getDate() + days);
@@ -327,6 +367,7 @@ export default function AlfatecInvestPro() {
   const assets = useMemo(() => buildAssetMap(extraAssets), [extraAssets]);
   const portfolioAnalysis = useMemo(() => analyzePortfolio(portfolio, assets), [portfolio, assets]);
   const marketResults = useMemo(() => searchAssets(marketSearch, marketType, assets, { includeDynamic: false }), [marketSearch, marketType, assets]);
+  const rankedAssets = useMemo(() => [...assets].map((asset) => ({ ...asset, score: calculateAssetScore(asset, weights) })).sort((a, b) => b.score - a.score), [assets, weights]);
   const currentUser = useMemo(() => accounts.find((account) => account.id === sessionId) ?? null, [accounts, sessionId]);
   const clients = useMemo(() => accounts.filter((account) => account.role === "CLIENTE"), [accounts]);
   const financial = useMemo(() => buildFinancialSummary(clients, plans, payments), [clients, plans, payments]);
@@ -334,6 +375,7 @@ export default function AlfatecInvestPro() {
   const comparison = useMemo(() => buildComparison(assetA, assetB, range), [assetA, assetB, range]);
   const returnA = performance(rangeHistory(assetA, range));
   const returnB = performance(rangeHistory(assetB, range));
+  const comparisonRecommendation = useMemo(() => buildComparisonRecommendation(assetA, assetB, returnA, returnB, weights), [assetA, assetB, returnA, returnB, weights]);
   const allowedClientModules = currentUser?.role === "CLIENTE" ? clientModules.filter((item) => currentUser.permissions.includes(item.id)) : clientModules;
   const adminNavigationModules = useMemo(() => [
     ...clientModules.map((item) => ({ ...item, group: "Área do cliente" })),
@@ -716,7 +758,10 @@ export default function AlfatecInvestPro() {
         )}
 
         {adminModule === "planos" && (
-          <Section title="Planos" subtitle="Configure valores, duração, status e permissões." eyebrow="Liberação comercial">
+          <Section title="Planos" subtitle="Configure valores, duração, status e permissões sem alterar clientes já cadastrados." eyebrow="Liberação comercial">
+            <div className="mb-5 rounded-3xl border border-cyan-400/30 bg-cyan-500/10 p-4 text-sm font-semibold text-cyan-800 dark:text-cyan-200">
+              Alterações feitas aqui atualizam apenas os planos para novas cobranças e renovações. Clientes já cadastrados, como Tutu e Pedro Paladino, continuam com cadastro, status, vencimento e permissões preservados.
+            </div>
             <div className="grid gap-6 lg:grid-cols-3">
               {plans.map((plan) => <PlanCard key={plan.id} plan={plan} setPlans={setPlans} />)}
             </div>
@@ -813,15 +858,29 @@ export default function AlfatecInvestPro() {
         {clientModule === "oportunidades" && (
           <Section title="Oportunidades" subtitle="Ranking automático por score, dividendos, qualidade, valor e crescimento." eyebrow="Radar de oportunidades">
             <div className="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
-              <PremiumCard title="Filtros rápidos" description="Use para filtrar e encontrar oportunidades por tipo de mercado." icon={Search}>
-                <div className="mb-4 flex flex-col gap-3 lg:flex-row">
-                  <div className="relative flex-1"><Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" /><input value={marketSearch} onChange={(e) => setMarketSearch(e.target.value)} placeholder="Ex.: GARE11, dividendos, logística, banco..." className="h-12 w-full rounded-2xl border border-slate-200 bg-white pl-12 pr-4 outline-none focus:border-teal-400 dark:border-white/10 dark:bg-white/5" /></div>
-                  <select value={marketType} onChange={(e) => setMarketType(e.target.value as AssetType | "TODOS")} className="h-12 rounded-2xl border border-slate-200 bg-white px-4 dark:border-white/10 dark:bg-slate-950">{assetTypeOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
-                </div>
-                <div className="space-y-3">{marketResults.slice(0, 8).map((asset, index) => <RankingRow key={asset.ticker} asset={{ ...asset, score: calculateAssetScore(asset, weights) }} index={index + 1} onClick={() => selectAsset(asset, "mercado")} />)}</div>
-              </PremiumCard>
+              <div className="space-y-6">
+                <PremiumCard title="Critérios do radar" description="Resumo dos pesos usados nas notas e recomendações." icon={BrainCircuit}>
+                  <div className="grid gap-3 text-sm text-slate-600 dark:text-slate-300">
+                    <p>As notas combinam dividend yield, valuation, qualidade operacional, crescimento, liquidez e risco. O ativo sobe no ranking quando entrega bons fundamentos com risco controlado e liquidez suficiente.</p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <InfoTile label="Dividendos" value={`${weights.dividendYield}% do peso`} />
+                      <InfoTile label="Valuation" value={`${weights.valuation}% do peso`} />
+                      <InfoTile label="Qualidade" value={`${weights.quality}% do peso`} />
+                      <InfoTile label="Crescimento" value={`${weights.growth}% do peso`} />
+                    </div>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">A recomendação é uma leitura automatizada do radar, não uma orientação personalizada de investimento.</p>
+                  </div>
+                </PremiumCard>
+                <PremiumCard title="Filtros rápidos" description="Use para filtrar e encontrar oportunidades por tipo de mercado." icon={Search}>
+                  <div className="mb-4 flex flex-col gap-3 lg:flex-row">
+                    <div className="relative flex-1"><Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" /><input value={marketSearch} onChange={(e) => setMarketSearch(e.target.value)} placeholder="Ex.: GARE11, dividendos, logística, banco..." className="h-12 w-full rounded-2xl border border-slate-200 bg-white pl-12 pr-4 outline-none focus:border-teal-400 dark:border-white/10 dark:bg-white/5" /></div>
+                    <select value={marketType} onChange={(e) => setMarketType(e.target.value as AssetType | "TODOS")} className="h-12 rounded-2xl border border-slate-200 bg-white px-4 dark:border-white/10 dark:bg-slate-950">{assetTypeOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
+                  </div>
+                  <div className="space-y-3">{marketResults.slice(0, 8).map((asset, index) => <RankingRow key={asset.ticker} asset={{ ...asset, score: calculateAssetScore(asset, weights) }} index={index + 1} onClick={() => selectAsset(asset, "mercado")} />)}</div>
+                </PremiumCard>
+              </div>
               <PremiumCard title="Melhores scores do mercado" description="Classificação automatizada com critérios transparentes. Não é recomendação personalizada." icon={TrendingUp}>
-                <div className="space-y-3">{[...assets].map((asset) => ({ ...asset, score: calculateAssetScore(asset, weights) })).sort((a, b) => b.score - a.score).slice(0, 12).map((asset, index) => <RankingRow key={asset.ticker} asset={asset} index={index + 1} onClick={() => selectAsset(asset, "mercado")} />)}</div>
+                <div className="space-y-3">{rankedAssets.slice(0, 12).map((asset, index) => <RankingRow key={asset.ticker} asset={asset} index={index + 1} onClick={() => selectAsset(asset, "mercado")} />)}</div>
               </PremiumCard>
             </div>
           </Section>
@@ -829,16 +888,19 @@ export default function AlfatecInvestPro() {
 
         {clientModule === "comparador" && (
           <Section title="Comparador" subtitle="Compare qualquer combinação: ação, FII, ETF, BDR ou cripto." eyebrow="Gráfico profissional">
-            <PremiumCard title="Comparar ativos" description="Use as barras de pesquisa para escolher os dois lados da comparação." icon={LineChartIcon}>
-              <div className="grid gap-4 lg:grid-cols-2">
-                <SearchBox label="Pesquisar Ativo A" value={searchA} onChange={setSearchA} assets={assets} onSelect={(asset) => { setAssetA(asset); setSearchA(asset.ticker); }} />
-                <SearchBox label="Pesquisar Ativo B" value={searchB} onChange={setSearchB} assets={assets} onSelect={(asset) => { setAssetB(asset); setSearchB(asset.ticker); }} />
-              </div>
-              <div className="mt-5 flex flex-wrap gap-2">{ranges.map((item) => <button key={item.id} onClick={() => setRange(item.id)} className={cls("rounded-full px-4 py-2 text-sm font-bold", range === item.id ? "bg-teal-500 text-white" : "bg-slate-100 dark:bg-white/10")}>{item.label}</button>)}</div>
-              <div className="mt-5 grid gap-4 lg:grid-cols-2"><PerformancePill asset={assetA} value={returnA} /><PerformancePill asset={assetB} value={returnB} /></div>
-              <div className="mt-5 h-[430px]"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={comparison}><CartesianGrid strokeDasharray="3 3" opacity={0.16} /><XAxis dataKey="label" minTickGap={28} /><YAxis yAxisId="left" unit="%" /><YAxis yAxisId="right" orientation="right" tickFormatter={(value) => compactMoney.format(Number(value))} /><Tooltip formatter={(value, name) => name === "Volume" ? compactMoney.format(Number(value)) : `${value}%`} /><Legend /><Bar yAxisId="right" dataKey="volumeA" name="Volume" fill="#334155" opacity={0.22} /><Line yAxisId="left" type="monotone" dataKey={assetA.ticker} name={`${assetA.ticker} %`} stroke="#14b8a6" strokeWidth={3} dot={false} /><Line yAxisId="left" type="monotone" dataKey={assetB.ticker} name={`${assetB.ticker} %`} stroke="#38bdf8" strokeWidth={3} dot={false} /></ComposedChart></ResponsiveContainer></div>
-              <ComparisonTable a={assetA} b={assetB} />
-            </PremiumCard>
+            <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+              <PremiumCard title="Comparar ativos" description="Use as barras de pesquisa para escolher os dois lados da comparação." icon={LineChartIcon}>
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <SearchBox label="Pesquisar Ativo A" value={searchA} onChange={setSearchA} assets={assets} onSelect={(asset) => { setAssetA(asset); setSearchA(asset.ticker); }} />
+                  <SearchBox label="Pesquisar Ativo B" value={searchB} onChange={setSearchB} assets={assets} onSelect={(asset) => { setAssetB(asset); setSearchB(asset.ticker); }} />
+                </div>
+                <div className="mt-5 flex flex-wrap gap-2">{ranges.map((item) => <button key={item.id} onClick={() => setRange(item.id)} className={cls("rounded-full px-4 py-2 text-sm font-bold", range === item.id ? "bg-teal-500 text-white" : "bg-slate-100 dark:bg-white/10")}>{item.label}</button>)}</div>
+                <div className="mt-5 grid gap-4 lg:grid-cols-2"><PerformancePill asset={assetA} value={returnA} /><PerformancePill asset={assetB} value={returnB} /></div>
+                <div className="mt-5 h-[430px]"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={comparison}><CartesianGrid strokeDasharray="3 3" opacity={0.16} /><XAxis dataKey="label" minTickGap={28} /><YAxis yAxisId="left" unit="%" /><YAxis yAxisId="right" orientation="right" tickFormatter={(value) => compactMoney.format(Number(value))} /><Tooltip formatter={(value, name) => name === "Volume" ? compactMoney.format(Number(value)) : `${value}%`} /><Legend /><Bar yAxisId="right" dataKey="volumeA" name="Volume" fill="#334155" opacity={0.22} /><Line yAxisId="left" type="monotone" dataKey={assetA.ticker} name={`${assetA.ticker} %`} stroke="#14b8a6" strokeWidth={3} dot={false} /><Line yAxisId="left" type="monotone" dataKey={assetB.ticker} name={`${assetB.ticker} %`} stroke="#38bdf8" strokeWidth={3} dot={false} /></ComposedChart></ResponsiveContainer></div>
+                <ComparisonTable a={assetA} b={assetB} />
+              </PremiumCard>
+              <ComparisonRecommendationCard recommendation={comparisonRecommendation} a={assetA} b={assetB} returnA={returnA} returnB={returnB} />
+            </div>
           </Section>
         )}
 
@@ -1072,6 +1134,33 @@ function SearchBox({ label, value, onChange, assets, onSelect }: { label: string
 function PerformancePill({ asset, value }: { asset: Asset; value: number }) {
   return <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/5"><div className="flex items-center justify-between"><div><p className="text-sm text-slate-500">{asset.name}</p><p className="text-xl font-black">{asset.ticker}</p></div><div className={cls("flex items-center gap-1 rounded-full px-3 py-1 text-sm font-black", value >= 0 ? "bg-emerald-500/10 text-emerald-500" : "bg-red-500/10 text-red-500")}>{value >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}{pct(value)}</div></div></div>;
 }
+function ComparisonRecommendationCard({ recommendation, a, b, returnA, returnB }: { recommendation: ReturnType<typeof buildComparisonRecommendation>; a: Asset; b: Asset; returnA: number; returnB: number }) {
+  const winnerDividend = dividendPerShare(recommendation.winner);
+  return (
+    <PremiumCard title="Mais indicada pelo radar" description="Leitura comparativa entre os dois ativos selecionados." icon={ShieldCheck}>
+      <div className="rounded-3xl bg-slate-950 p-5 text-white dark:bg-white/10">
+        <p className="text-xs font-black uppercase tracking-[0.22em] text-cyan-300">Ativo em destaque</p>
+        <div className="mt-3 flex items-end justify-between gap-3">
+          <div>
+            <h3 className="text-4xl font-black">{recommendation.winner.ticker}</h3>
+            <p className="mt-1 text-sm text-slate-300">{recommendation.winner.name}</p>
+          </div>
+          <span className="rounded-full bg-cyan-400/15 px-3 py-1 text-sm font-black text-cyan-200">Score {recommendation.winner === a ? recommendation.scoreA : recommendation.scoreB}/100</span>
+        </div>
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <InfoTile label={a.ticker} value={`${recommendation.scoreA}/100 • ${pct(returnA)}`} />
+        <InfoTile label={b.ticker} value={`${recommendation.scoreB}/100 • ${pct(returnB)}`} />
+        <InfoTile label="Dividendos" value={`${dividendFrequency(recommendation.winner)} • ${winnerDividend === undefined ? "-" : money.format(winnerDividend)}`} />
+        <InfoTile label="Risco" value={recommendation.winner.risk} />
+      </div>
+      <ul className="mt-4 space-y-2">
+        {recommendation.reasons.map((reason) => <li key={reason} className="flex gap-2 text-sm text-slate-600 dark:text-slate-300"><ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-cyan-500" />{reason}</li>)}
+      </ul>
+      <p className="mt-4 rounded-2xl bg-amber-500/10 p-3 text-xs font-semibold text-amber-700 dark:text-amber-300">Resumo automatizado: {recommendation.winner.ticker} aparece mais forte que {recommendation.loser.ticker} neste recorte por combinar score, retorno no período, dividendos e risco. Use como apoio de análise, não como recomendação personalizada.</p>
+    </PremiumCard>
+  );
+}
 function ComparisonTable({ a, b }: { a: Asset; b: Asset }) {
   const rows = [["Preço", money.format(a.price), money.format(b.price)], ["Dividend Yield", pct(a.metrics.dividendYield), pct(b.metrics.dividendYield)], ["P/L", metric(a.metrics.pl), metric(b.metrics.pl)], ["P/VP", metric(a.metrics.pvp), metric(b.metrics.pvp)], ["ROE", pct(a.metrics.roe), pct(b.metrics.roe)], ["CAGR", pct(a.metrics.cagr), pct(b.metrics.cagr)], ["Volatilidade", pct(a.metrics.volatility), pct(b.metrics.volatility)], ["Drawdown", pct(a.metrics.drawdown), pct(b.metrics.drawdown)], ["Liquidez", compactMoney.format(a.liquidity), compactMoney.format(b.liquidity)], ["Risco", a.risk, b.risk]];
   return <div className="mt-5 overflow-hidden rounded-3xl border border-slate-200 text-sm dark:border-white/10"><div className="grid grid-cols-3 bg-slate-50 p-3 font-bold dark:bg-white/5"><span>Indicador</span><span>{a.ticker}</span><span>{b.ticker}</span></div>{rows.map((row) => <div key={row[0]} className="grid grid-cols-3 border-t border-slate-100 p-3 dark:border-white/10"><span className="text-slate-500">{row[0]}</span><strong>{row[1]}</strong><strong>{row[2]}</strong></div>)}</div>;
@@ -1091,15 +1180,72 @@ function WeightSlider({ label, value, onChange }: { label: string; value: number
   return <label className="mb-4 block"><div className="mb-2 flex justify-between text-sm"><span>{label}</span><strong>{value}</strong></div><input type="range" min="0" max="40" value={value} onChange={(e) => onChange(Number(e.target.value))} className="w-full accent-cyan-500" /></label>;
 }
 function RankingRow({ asset, index, onClick }: { asset: Asset; index: number; onClick: () => void }) {
-  return <button onClick={onClick} className="flex w-full items-center gap-4 rounded-3xl border border-slate-200 bg-white p-4 text-left transition hover:scale-[1.01] hover:shadow-premium dark:border-white/10 dark:bg-white/5"><span className="grid h-10 w-10 place-items-center rounded-2xl bg-slate-950 font-black text-white dark:bg-white dark:text-slate-950">{index}</span><span className="min-w-0 flex-1"><strong>{asset.ticker}</strong><span className="ml-2 text-sm text-slate-500">{asset.name}</span><p className="mt-1 text-xs text-slate-400">{typeLabels[asset.type]} • {asset.segment}</p></span><span className="rounded-full bg-cyan-500/10 px-3 py-1 font-black text-cyan-600 dark:text-cyan-300">{asset.score}</span></button>;
+  const dividend = dividendPerShare(asset);
+  return (
+    <button onClick={onClick} className="flex w-full items-center gap-4 rounded-3xl border border-slate-200 bg-white p-4 text-left transition hover:scale-[1.01] hover:shadow-premium dark:border-white/10 dark:bg-white/5">
+      <span className="grid h-10 w-10 place-items-center rounded-2xl bg-slate-950 font-black text-white dark:bg-white dark:text-slate-950">{index}</span>
+      <span className="min-w-0 flex-1">
+        <strong>{asset.ticker}</strong><span className="ml-2 text-sm text-slate-500">{asset.name}</span>
+        <p className="mt-1 text-xs text-slate-400">{typeLabels[asset.type]} • {asset.segment}</p>
+        <p className="mt-2 text-xs font-semibold text-cyan-700 dark:text-cyan-300">Dividendos: {dividendFrequency(asset)} • {dividend === undefined ? "sem valor recorrente" : `${money.format(dividend)} por ação/cota`}</p>
+      </span>
+      <span className="rounded-full bg-cyan-500/10 px-3 py-1 font-black text-cyan-600 dark:text-cyan-300">{asset.score}</span>
+    </button>
+  );
 }
 function StatusPill({ status }: { status: ClientStatus | PaymentStatus }) {
   const map: Record<string, string> = { ativo: "bg-emerald-500/10 text-emerald-500", pago: "bg-emerald-500/10 text-emerald-500", bloqueado: "bg-red-500/10 text-red-500", vencido: "bg-amber-500/10 text-amber-500", pendente: "bg-amber-500/10 text-amber-500", cancelado: "bg-slate-500/10 text-slate-500" };
   return <span className={cls("inline-flex items-center justify-center rounded-full px-3 py-1 text-xs font-black uppercase", map[status])}>{status}</span>;
 }
 function PlanCard({ plan, setPlans }: { plan: Plan; setPlans: React.Dispatch<React.SetStateAction<Plan[]>> }) {
-  function update(patch: Partial<Plan>) { setPlans((current) => current.map((item) => item.id === plan.id ? { ...item, ...patch } : item)); }
-  return <PremiumCard title={plan.name} description={`${plan.durationDays} dias de acesso`} icon={ShieldCheck}><div className="space-y-3"><Input label="Valor" type="number" step="0.01" value={plan.value} onChange={(e) => update({ value: Number(e.target.value) })} /><Input label="Duração em dias" type="number" value={plan.durationDays} onChange={(e) => update({ durationDays: Number(e.target.value) })} /><Select label="Status" value={plan.status} onChange={(e) => update({ status: e.target.value as "ativo" | "inativo" })}><option value="ativo">Ativo</option><option value="inativo">Inativo</option></Select><div className="rounded-2xl bg-slate-50 p-3 dark:bg-white/5"><p className="mb-2 text-sm font-bold">Permissões</p>{clientModules.map((module) => <label key={module.id} className="mb-2 flex items-center gap-2 text-sm"><input type="checkbox" checked={plan.permissions.includes(module.id)} onChange={(e) => update({ permissions: e.target.checked ? [...plan.permissions, module.id] : plan.permissions.filter((id) => id !== module.id) })} />{module.label}</label>)}</div></div></PremiumCard>;
+  const [draft, setDraft] = useState<Plan>(plan);
+  const [saved, setSaved] = useState(false);
+  const hasChanges = JSON.stringify(draft) !== JSON.stringify(plan);
+  const canSave = draft.value >= 0 && draft.durationDays > 0;
+
+  useEffect(() => {
+    setDraft(plan);
+    setSaved(false);
+  }, [plan]);
+
+  function updateDraft(patch: Partial<Plan>) {
+    setDraft((current) => ({ ...current, ...patch }));
+    setSaved(false);
+  }
+
+  function savePlan() {
+    if (!canSave) return;
+    setPlans((current) => current.map((item) => item.id === plan.id ? { ...item, ...draft } : item));
+    setSaved(true);
+  }
+
+  return (
+    <PremiumCard title={plan.name} description={`${draft.durationDays} dias de acesso`} icon={ShieldCheck}>
+      <div className="space-y-3">
+        <Input label="Valor" type="number" step="0.01" min="0" value={draft.value} onChange={(e) => updateDraft({ value: Number(e.target.value) })} />
+        <Input label="Duração em dias" type="number" min="1" value={draft.durationDays} onChange={(e) => updateDraft({ durationDays: Number(e.target.value) })} />
+        <Select label="Status" value={draft.status} onChange={(e) => updateDraft({ status: e.target.value as "ativo" | "inativo" })}>
+          <option value="ativo">Ativo</option>
+          <option value="inativo">Inativo</option>
+        </Select>
+        <div className="rounded-2xl bg-slate-50 p-3 dark:bg-white/5">
+          <p className="mb-2 text-sm font-bold">Permissões</p>
+          {clientModules.map((module) => (
+            <label key={module.id} className="mb-2 flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={draft.permissions.includes(module.id)} onChange={(e) => updateDraft({ permissions: e.target.checked ? [...draft.permissions, module.id] : draft.permissions.filter((id) => id !== module.id) })} />
+              {module.label}
+            </label>
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" onClick={savePlan} disabled={!hasChanges || !canSave} className="rounded-2xl bg-cyan-500 px-4 py-3 text-sm font-bold text-white transition disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500 dark:disabled:bg-white/10 dark:disabled:text-slate-400">Salvar alterações</button>
+          <button type="button" onClick={() => { setDraft(plan); setSaved(false); }} disabled={!hasChanges} className="rounded-2xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700 transition disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white/10 dark:text-slate-100">Desfazer</button>
+          {saved && <span className="text-sm font-bold text-emerald-500">Plano salvo</span>}
+          {!canSave && <span className="text-sm font-bold text-red-500">Informe valor e duração válidos</span>}
+        </div>
+      </div>
+    </PremiumCard>
+  );
 }
 function PermissionsEditor({ client, updateClient }: { client: Account; updateClient: (id: string, patch: Partial<Account>) => void }) {
   return <div className="mt-3 rounded-2xl bg-slate-50 p-3 dark:bg-white/5"><p className="mb-2 text-sm font-bold">Menus liberados para o cliente</p><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{clientModules.map((module) => <label key={module.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={client.permissions.includes(module.id)} onChange={(e) => updateClient(client.id, { permissions: e.target.checked ? [...client.permissions, module.id] : client.permissions.filter((id) => id !== module.id) })} />{module.label}</label>)}</div></div>;
