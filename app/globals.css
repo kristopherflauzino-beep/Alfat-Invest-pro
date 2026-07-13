@@ -89,3 +89,75 @@ select,
 textarea {
   color: #0f172a;
 }
+
+/* Dark mode hardening: keep every surface readable on the app shell. */
+.dark,
+.dark body {
+  background: #020817;
+  color: #f8fafc;
+}
+
+.dark * {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.dark table,
+.dark thead,
+.dark tbody,
+.dark tr,
+.dark td,
+.dark th,
+.dark section,
+.dark article,
+.dark aside,
+.dark nav,
+.dark dialog {
+  background-color: transparent;
+  color: #f8fafc;
+}
+
+.dark .bg-white,
+.dark .bg-slate-50,
+.dark .bg-slate-100 {
+  background-color: #0f172a !important;
+}
+
+.dark .text-black,
+.dark .text-slate-950,
+.dark .text-slate-900,
+.dark .text-slate-800,
+.dark .text-slate-700,
+.dark .text-gray-950,
+.dark .text-gray-900,
+.dark .text-gray-800,
+.dark .text-gray-700 {
+  color: #f8fafc !important;
+}
+
+.dark .text-slate-600,
+.dark .text-slate-500,
+.dark .text-gray-600,
+.dark .text-gray-500 {
+  color: #cbd5e1 !important;
+}
+
+.dark button,
+.dark input,
+.dark select,
+.dark textarea {
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+.dark .recharts-default-tooltip {
+  background: #0f172a !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  color: #f8fafc !important;
+}
+
+.dark .recharts-tooltip-label,
+.dark .recharts-tooltip-item,
+.dark .recharts-legend-item-text,
+.dark .recharts-cartesian-axis-tick-value {
+  color: #cbd5e1 !important;
+  fill: #cbd5e1 !important;
+}
