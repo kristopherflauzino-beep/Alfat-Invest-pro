@@ -11,12 +11,15 @@ type AppStatePayload = {
   portfolio: unknown[];
   planPriceHistory: unknown[];
   grahamSettings: Record<string, unknown>;
+  fiiSettings: Record<string, unknown>;
   auditLogs: unknown[];
 };
 
-const allClientModules = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "radar", "relatorios", "graham_valuation", "plano", "configuracoes"];
+const allClientModules = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "radar", "relatorios", "graham_valuation", "alfatec_fiis", "plano", "configuracoes"];
 const appStateBlobPath = process.env.APP_STATE_BLOB_PATH || "alfatec-invest-pro/app-state.json";
 const defaultGrahamSettings = { defaultY: 5.5, minGrowth: 0, maxGrowth: 20, scoreWeight: 10, enabled: true, clientsCanEditGrowth: true, clientsCanEditY: false };
+const defaultFiiWeights = { qualidade: 20, renda: 18, risco: 16, valuation: 14, gestao: 12, liquidez: 6, diversificacao: 14 };
+const defaultFiiSettings = { enabled: true, referenceRate: 6.5, referenceRateSource: "Parametro configurado pelo administrador", minimumConfidence: "Media", weightsByKind: { tijolo: { qualidade: 20, renda: 20, risco: 15, valuation: 15, gestao: 10, liquidez: 5, diversificacao: 15 }, renda_urbana: { qualidade: 20, renda: 20, risco: 15, valuation: 15, gestao: 10, liquidez: 5, diversificacao: 15 }, papel: { qualidade: 25, renda: 15, risco: 20, valuation: 10, gestao: 10, liquidez: 5, diversificacao: 15 }, fof: { qualidade: 25, renda: 15, risco: 10, valuation: 15, gestao: 20, liquidez: 5, diversificacao: 10 }, hibrido: defaultFiiWeights, desenvolvimento: { qualidade: 20, renda: 10, risco: 25, valuation: 15, gestao: 15, liquidez: 5, diversificacao: 10 }, infraestrutura: { qualidade: 20, renda: 20, risco: 15, valuation: 15, gestao: 10, liquidez: 5, diversificacao: 15 }, outro: { qualidade: 18, renda: 18, risco: 18, valuation: 16, gestao: 10, liquidez: 8, diversificacao: 12 } } };
 
 const defaultState: AppStatePayload = {
   accounts: [
@@ -58,6 +61,7 @@ const defaultState: AppStatePayload = {
   portfolio: [],
   planPriceHistory: [],
   grahamSettings: defaultGrahamSettings,
+  fiiSettings: defaultFiiSettings,
   auditLogs: []
 };
 
@@ -110,6 +114,7 @@ function normalizeState(value: unknown): AppStatePayload {
     portfolio: Array.isArray(input.portfolio) ? input.portfolio : [],
     planPriceHistory: Array.isArray(input.planPriceHistory) ? input.planPriceHistory : [],
     grahamSettings: input.grahamSettings && typeof input.grahamSettings === "object" ? { ...defaultGrahamSettings, ...input.grahamSettings } : defaultGrahamSettings,
+    fiiSettings: input.fiiSettings && typeof input.fiiSettings === "object" ? { ...defaultFiiSettings, ...input.fiiSettings } : defaultFiiSettings,
     auditLogs: Array.isArray(input.auditLogs) ? input.auditLogs : []
   };
 }

@@ -277,23 +277,110 @@ export function getAsset(ticker: string, assets: Asset[] = localAssets) {
   return assets.find((asset) => asset.ticker === clean) ?? createGeneratedAsset(clean);
 }
 
+const knownAssetAliases: Record<string, string[]> = {
+  PETR4: ["petrobras", "petroleo brasileiro", "petr", "petr4:bvmf"],
+  PETR3: ["petrobras on", "petr3", "petr3:bvmf"],
+  VALE3: ["vale", "vale s.a.", "mineracao vale", "vale3:bvmf"],
+  BBAS3: ["banco do brasil", "bb", "bbas", "bbas3:bvmf"],
+  ITSA4: ["itau", "itausa", "itau sa", "itau holding", "itsa4:bvmf"],
+  WEGE3: ["weg", "wege", "wege3:bvmf"],
+  ABEV3: ["ambev", "bebidas ambev", "abev3:bvmf"],
+  BBDC4: ["bradesco", "banco bradesco", "bbdc4", "bbdc4:bvmf"],
+  BBDC3: ["bradesco on", "bbdc3", "bbdc3:bvmf"],
+  ITUB4: ["itau unibanco", "itub", "itub4", "itub4:bvmf"],
+  MGLU3: ["magazine luiza", "magalu", "mglu", "mglu3", "mglu3:bvmf"],
+  GGBR4: ["gerdau", "ggbr", "ggbr4", "ggbr4:bvmf"],
+  GARE11: ["gare", "guardian", "guardian real estate", "gare11:bvmf"],
+  MXRF11: ["maxi renda", "maxi renda fii", "mxrf11:bvmf"],
+  HGLG11: ["cshg logistica", "hglg", "hglg11:bvmf"],
+  KNRI11: ["kinea renda imobiliaria", "knri", "knri11:bvmf"],
+  XPLG11: ["xp log", "xplg", "xplg11:bvmf"],
+  KNCR11: ["kinea rendimentos", "kncr", "kncr11:bvmf"],
+  VISC11: ["vinci shopping", "visc", "visc11:bvmf"],
+  CPTS11: ["capitania", "capitania securities", "cpts", "cpts11:bvmf"],
+  BTC: ["bitcoin", "btcbrl"],
+  ETH: ["ethereum", "ether", "ethbrl"],
+  SOL: ["solana", "solbrl"]
+};
+
+function normalizeSearchText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function tickerWithSuffixes(ticker: string) {
+  return [ticker, `${ticker}:BVMF`, `${ticker}.SA`, ticker.replace(/11$/, "")];
+}
+
+function termsForAsset(asset: Asset) {
+  return [
+    ...tickerWithSuffixes(asset.ticker),
+    asset.name,
+    asset.company,
+    asset.manager,
+    asset.administrator,
+    asset.sector,
+    asset.segment,
+    asset.market,
+    ...(asset.tags ?? []),
+    ...(knownAssetAliases[asset.ticker] ?? [])
+  ].filter(Boolean).map((item) => normalizeSearchText(String(item)));
+}
+
+function editDistance(a: string, b: string) {
+  if (Math.abs(a.length - b.length) > 2) return 3;
+  const dp = Array.from({ length: a.length + 1 }, (_, i) => Array.from({ length: b.length + 1 }, (_, j) => i === 0 ? j : j === 0 ? i : 0));
+  for (let i = 1; i <= a.length; i += 1) {
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+    }
+  }
+  return dp[a.length][b.length];
+}
+
+function searchPriority(asset: Asset, rawQuery: string) {
+  const normalized = normalizeSearchText(rawQuery);
+  const ticker = normalizeSearchText(asset.ticker);
+  if (!normalized) return 1;
+  const terms = termsForAsset(asset);
+  if (ticker === normalized) return 1000;
+  if (terms.some((term) => term === normalized)) return 900;
+  if (ticker.startsWith(normalized)) return 820;
+  if (terms.some((term) => term.startsWith(normalized))) return 740;
+  if (terms.some((term) => term.includes(normalized))) return 620;
+  if (normalized.length >= 4 && terms.some((term) => editDistance(term.slice(0, normalized.length), normalized) <= 1)) return 480;
+  return 0;
+}
+
+function knownAliasTicker(query: string) {
+  const normalized = normalizeSearchText(query);
+  return Object.entries(knownAssetAliases).find(([ticker, aliases]) => normalizeSearchText(ticker) === normalized || aliases.some((alias) => normalizeSearchText(alias) === normalized))?.[0];
+}
+
 export function searchAssets(query: string, type: AssetType | "TODOS" = "TODOS", assets: Asset[] = localAssets, options: { includeDynamic?: boolean } = {}) {
   const q = normalizeTicker(query);
-  const text = query.toLowerCase().trim();
-  const filtered = assets.filter((asset) => {
-    const matchesType = type === "TODOS" || asset.type === type;
-    if (!matchesType) return false;
-    if (!text) return true;
-    return [asset.ticker, asset.name, asset.sector, asset.segment, asset.market, ...(asset.tags ?? [])]
-      .join(" ")
-      .toLowerCase()
-      .includes(text) || asset.ticker.includes(q);
-  });
-  if ((options.includeDynamic ?? true) && q && isTickerLike(q) && !filtered.some((asset) => asset.ticker === q)) {
+  const normalized = normalizeSearchText(query);
+  const aliasTicker = knownAliasTicker(query);
+  if (!normalized) return assets.filter((asset) => type === "TODOS" || asset.type === type).sort((a, b) => b.score - a.score);
+  const ranked = assets
+    .map((asset) => ({ asset, priority: type === "TODOS" || asset.type === type ? searchPriority(asset, query) : 0 }))
+    .filter((item) => item.priority > 0)
+    .sort((a, b) => b.priority - a.priority || b.asset.liquidity - a.asset.liquidity || b.asset.score - a.asset.score)
+    .map((item) => item.asset);
+
+  if (aliasTicker && !ranked.some((asset) => asset.ticker === aliasTicker)) {
+    const dynamic = createGeneratedAsset(aliasTicker);
+    if (type === "TODOS" || dynamic.type === type) ranked.unshift(dynamic);
+  } else if ((options.includeDynamic ?? true) && q && isTickerLike(q) && !ranked.some((asset) => asset.ticker === q)) {
     const dynamic = createGeneratedAsset(q);
-    if (type === "TODOS" || dynamic.type === type) filtered.unshift(dynamic);
+    if (type === "TODOS" || dynamic.type === type) ranked.unshift(dynamic);
   }
-  return filtered.sort((a, b) => b.score - a.score);
+  return ranked;
 }
 
 export function makeSummary(asset: Asset) {

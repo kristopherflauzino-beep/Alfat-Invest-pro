@@ -7,6 +7,7 @@ import {
   Bell,
   BrainCircuit,
   BriefcaseBusiness,
+  Building2,
   Calculator,
   CalendarDays,
   History,
@@ -92,11 +93,25 @@ import { GrahamExplanation } from "@/components/valuation/GrahamExplanation";
 import { GrahamGrowthCard } from "@/components/valuation/GrahamGrowthCard";
 import { GrahamNumberCard } from "@/components/valuation/GrahamNumberCard";
 import { GrahamOpportunityFilter } from "@/components/valuation/GrahamOpportunityFilter";
+import {
+  analisarAlfatecFii,
+  compararFiiPorSegmento,
+  defaultAlfatecFiiSettings,
+  fiiConfidenceMeetsMinimum,
+  normalizeAlfatecFiiSettings,
+  type AlfatecFiiAnalysis,
+  type AlfatecFiiSettings
+} from "@/lib/analysis/alfatec-fii";
+import { AlfatecFiiScoreCard } from "@/components/fii/AlfatecFiiScoreCard";
+import { FiiDataSourceInfo } from "@/components/fii/FiiDataSourceInfo";
+import { FiiOpportunityFilters, type FiiOpportunityFilterState } from "@/components/fii/FiiOpportunityFilters";
+import { FiiScoreBreakdown } from "@/components/fii/FiiScoreBreakdown";
+import { FiiSegmentComparison } from "@/components/fii/FiiSegmentComparison";
 
 type Role = "ADMIN" | "CLIENTE";
 type ClientStatus = "ativo" | "pendente" | "bloqueado" | "vencido";
 type PaymentStatus = "pago" | "pendente" | "vencido" | "cancelado";
-type ClientModuleId = "dashboard" | "mercado" | "oportunidades" | "comparador" | "carteira" | "radar" | "relatorios" | "graham_valuation" | "plano" | "configuracoes";
+type ClientModuleId = "dashboard" | "mercado" | "oportunidades" | "comparador" | "carteira" | "radar" | "relatorios" | "graham_valuation" | "alfatec_fiis" | "plano" | "configuracoes";
 type AdminModuleId = "admin-dashboard" | "clientes" | "planos" | "financeiro" | "admin-relatorios" | "configuracoes";
 type RangeId = "1D" | "5D" | "1M" | "6M" | "1A" | "5A" | "MAX";
 
@@ -190,11 +205,12 @@ type AppStatePayload = {
   portfolio: PortfolioPosition[];
   planPriceHistory: PlanPriceHistory[];
   grahamSettings: GrahamSettings;
+  fiiSettings: AlfatecFiiSettings;
   auditLogs: AuditLog[];
 };
 
 const ADMIN_DEFAULT_HASH = "cc5c75de95387000d28fce6a21f4d8c4ff8560b1b37e73d39eb63c3029697db5";
-const allClientModules: ClientModuleId[] = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "radar", "relatorios", "graham_valuation", "plano", "configuracoes"];
+const allClientModules: ClientModuleId[] = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "radar", "relatorios", "graham_valuation", "alfatec_fiis", "plano", "configuracoes"];
 const clientModules: Array<{ id: ClientModuleId; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: "dashboard", label: "Dashboard", icon: Gauge },
   { id: "mercado", label: "Mercado", icon: BarChart3 },
@@ -204,6 +220,7 @@ const clientModules: Array<{ id: ClientModuleId; label: string; icon: React.Comp
   { id: "radar", label: "Radar IA", icon: BrainCircuit },
   { id: "relatorios", label: "Relatórios", icon: FileSpreadsheet },
   { id: "graham_valuation", label: "Valuation Graham", icon: Calculator },
+  { id: "alfatec_fiis", label: "Método AlfaTec FIIs", icon: Building2 },
   { id: "plano", label: "Plano", icon: WalletCards },
   { id: "configuracoes", label: "Configurações", icon: Settings }
 ];
@@ -249,6 +266,10 @@ function cls(...values: Array<string | false | undefined | null>) {
 function pct(value?: number | null) {
   if (value === undefined || value === null || Number.isNaN(value)) return "-";
   return `${percent.format(value)}%`;
+}
+function pp(value?: number | null) {
+  if (value === undefined || value === null || Number.isNaN(value)) return "-";
+  return `${percent.format(value)} p.p.`;
 }
 function metric(value?: number, suffix = "") {
   if (value === undefined || Number.isNaN(value)) return "-";
@@ -355,6 +376,10 @@ function normalizeGrahamSettings(settings?: Partial<GrahamSettings>): GrahamSett
   return { ...defaultGrahamSettings, ...(settings ?? {}) };
 }
 
+function normalizeFiiSettings(settings?: Partial<AlfatecFiiSettings>): AlfatecFiiSettings {
+  return normalizeAlfatecFiiSettings(settings);
+}
+
 function mergeById<T extends { id: string }>(server: T[], local: T[]) {
   const map = new Map<string, T>();
   server.forEach((item) => map.set(item.id, item));
@@ -390,6 +415,7 @@ function mergeAppState(server: Partial<AppStatePayload>, local: AppStatePayload)
     portfolio: (server.portfolio?.length ? server.portfolio : local.portfolio).length ? (server.portfolio?.length ? server.portfolio : local.portfolio) : starterPortfolio,
     planPriceHistory: mergeById(server.planPriceHistory ?? [], local.planPriceHistory),
     grahamSettings: normalizeGrahamSettings(server.grahamSettings ?? local.grahamSettings),
+    fiiSettings: normalizeFiiSettings(server.fiiSettings ?? local.fiiSettings),
     auditLogs: mergeById(server.auditLogs ?? [], local.auditLogs)
   };
 }
@@ -401,6 +427,7 @@ function statesDiffer(a: AppStatePayload, b: Partial<AppStatePayload>) {
     JSON.stringify(a.portfolio) !== JSON.stringify(b.portfolio ?? []) ||
     JSON.stringify(a.planPriceHistory) !== JSON.stringify(b.planPriceHistory ?? []) ||
     JSON.stringify(a.grahamSettings) !== JSON.stringify(b.grahamSettings ?? defaultGrahamSettings) ||
+    JSON.stringify(a.fiiSettings) !== JSON.stringify(b.fiiSettings ?? defaultAlfatecFiiSettings) ||
     JSON.stringify(a.auditLogs) !== JSON.stringify(b.auditLogs ?? []);
 }
 
@@ -417,7 +444,11 @@ function performance(history: Asset["priceHistory"]) {
   return first > 0 ? ((last / first) - 1) * 100 : 0;
 }
 
-function assetWithScore(asset: Asset, weights: RadarWeights, grahamSettings: GrahamSettings): Asset {
+function assetWithScore(asset: Asset, weights: RadarWeights, grahamSettings: GrahamSettings, fiiSettings: AlfatecFiiSettings): Asset {
+  if (asset.type === "FII") {
+    const fii = analisarAlfatecFii(asset, fiiSettings);
+    return { ...asset, score: fii.score ?? calculateAssetScore(asset, weights) };
+  }
   const baseScore = calculateAssetScore(asset, weights);
   const grahamWeight = grahamSettings.enabled ? Math.min(15, Math.max(0, grahamSettings.scoreWeight)) : 0;
   const graham = grahamScoreContribution(asset, grahamWeight);
@@ -433,6 +464,42 @@ function passesGrahamOpportunityFilters(asset: Asset, filters: { onlyBelow: bool
   if (filters.minMargin > 0 && (!analysis.applicable || (analysis.safetyMargin ?? -Infinity) < filters.minMargin)) return false;
   return true;
 }
+
+function fiiNumeric(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function passesFiiFilters(analysis: AlfatecFiiAnalysis, filters: FiiOpportunityFilterState) {
+  if (filters.minScore > 0 && ((analysis.score ?? -Infinity) < filters.minScore)) return false;
+  if (filters.kind !== "todos" && analysis.kind !== filters.kind) return false;
+  if (filters.segment && analysis.segment !== filters.segment) return false;
+  const pvp = fiiNumeric(analysis.pvp.value);
+  if (filters.maxPvp > 0 && (pvp === undefined || pvp > filters.maxPvp)) return false;
+  const dy = fiiNumeric(analysis.recurrentDividendYield.value);
+  if (filters.minDy > 0 && (dy === undefined || dy < filters.minDy)) return false;
+  const premium = fiiNumeric(analysis.riskPremium.value);
+  if (filters.minRiskPremium > 0 && (premium === undefined || premium < filters.minRiskPremium)) return false;
+  const liquidity = fiiNumeric(analysis.liquidity.value);
+  if (filters.minLiquidity > 0 && (liquidity === undefined || liquidity < filters.minLiquidity)) return false;
+  const vacancy = fiiNumeric(analysis.vacancy.value);
+  if (filters.maxVacancy > 0 && analysis.vacancy.status !== "nao_aplicavel" && (vacancy === undefined || vacancy > filters.maxVacancy)) return false;
+  if (filters.minimumConfidence !== "Todas" && !fiiConfidenceMeetsMinimum(analysis.confidence, filters.minimumConfidence)) return false;
+  if (filters.sustainableOnly && !["sustentavel", "aparentemente sustentavel"].includes(analysis.incomeQuality)) return false;
+  return true;
+}
+
+const defaultFiiFilters: FiiOpportunityFilterState = {
+  minScore: 0,
+  kind: "todos",
+  segment: "",
+  maxPvp: 0,
+  minDy: 0,
+  minRiskPremium: 0,
+  minLiquidity: 0,
+  maxVacancy: 0,
+  minimumConfidence: "Todas",
+  sustainableOnly: false
+};
 
 function passesRadarFilters(asset: Asset, filters: { grahamOnly: boolean; minMargin: number; minPotential: number; maxPl: number; maxPvp: number; minLiquidity: number; minRoe: number; maxDebt: number }) {
   const graham = analisarNumeroGraham(asset);
@@ -577,6 +644,7 @@ export default function AlfatecInvestPro() {
   const [payments, setPayments] = useState<Payment[]>([]);
   const [planPriceHistory, setPlanPriceHistory] = useState<PlanPriceHistory[]>([]);
   const [grahamSettings, setGrahamSettings] = useState<GrahamSettings>(defaultGrahamSettings);
+  const [fiiSettings, setFiiSettings] = useState<AlfatecFiiSettings>(defaultAlfatecFiiSettings);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [loginUser, setLoginUser] = useState("");
@@ -606,6 +674,10 @@ export default function AlfatecInvestPro() {
   const [grahamAsset, setGrahamAsset] = useState<Asset>(() => getAsset("PETR4"));
   const [grahamGrowth, setGrahamGrowth] = useState(8);
   const [grahamY, setGrahamY] = useState(defaultGrahamSettings.defaultY);
+  const [fiiSearch, setFiiSearch] = useState("GARE11");
+  const [fiiAsset, setFiiAsset] = useState<Asset>(() => getAsset("GARE11"));
+  const [fiiFilters, setFiiFilters] = useState<FiiOpportunityFilterState>(defaultFiiFilters);
+  const [radarFiiFilters, setRadarFiiFilters] = useState<FiiOpportunityFilterState>({ ...defaultFiiFilters, minScore: 70, minimumConfidence: "Baixa" });
   const [opGrahamOnly, setOpGrahamOnly] = useState(false);
   const [opMinMargin, setOpMinMargin] = useState(0);
   const [opPositiveLpa, setOpPositiveLpa] = useState(false);
@@ -629,10 +701,14 @@ export default function AlfatecInvestPro() {
   const portfolioAnalysis = useMemo(() => analyzePortfolio(portfolio, assets), [portfolio, assets]);
   const portfolioDividendCycle = useMemo(() => portfolioAnalysis.lines.reduce((sum, line) => sum + (dividendPerShare(line.asset) ?? 0) * line.quantity, 0), [portfolioAnalysis.lines]);
   const marketResults = useMemo(() => searchAssets(marketSearch, marketType, assets, { includeDynamic: false }), [marketSearch, marketType, assets]);
-  const rankedAssets = useMemo(() => [...assets].map((asset) => assetWithScore(asset, weights, grahamSettings)).sort((a, b) => b.score - a.score), [assets, weights, grahamSettings]);
-  const opportunityResults = useMemo(() => marketResults.map((asset) => assetWithScore(asset, weights, grahamSettings)).filter((asset) => passesGrahamOpportunityFilters(asset, { onlyBelow: opGrahamOnly, minMargin: opMinMargin, onlyPositiveLpa: opPositiveLpa, onlyPositiveVpa: opPositiveVpa })).sort((a, b) => (analisarNumeroGraham(b).safetyMargin ?? -Infinity) - (analisarNumeroGraham(a).safetyMargin ?? -Infinity)), [marketResults, weights, grahamSettings, opGrahamOnly, opMinMargin, opPositiveLpa, opPositiveVpa]);
-  const rankedOpportunityAssets = useMemo(() => rankedAssets.filter((asset) => passesGrahamOpportunityFilters(asset, { onlyBelow: opGrahamOnly, minMargin: opMinMargin, onlyPositiveLpa: opPositiveLpa, onlyPositiveVpa: opPositiveVpa })), [rankedAssets, opGrahamOnly, opMinMargin, opPositiveLpa, opPositiveVpa]);
-  const radarAssets = useMemo(() => rankedAssets.filter((asset) => passesRadarFilters(asset, { grahamOnly: radarGrahamOnly, minMargin: radarMinMargin, minPotential: radarMinPotential, maxPl: radarMaxPl, maxPvp: radarMaxPvp, minLiquidity: radarMinLiquidity, minRoe: radarMinRoe, maxDebt: radarMaxDebt })), [rankedAssets, radarGrahamOnly, radarMinMargin, radarMinPotential, radarMaxPl, radarMaxPvp, radarMinLiquidity, radarMinRoe, radarMaxDebt]);
+  const rankedAssets = useMemo(() => [...assets].map((asset) => assetWithScore(asset, weights, grahamSettings, fiiSettings)).sort((a, b) => b.score - a.score), [assets, weights, grahamSettings, fiiSettings]);
+  const opportunityResults = useMemo(() => marketResults.filter((asset) => asset.type !== "FII").map((asset) => assetWithScore(asset, weights, grahamSettings, fiiSettings)).filter((asset) => passesGrahamOpportunityFilters(asset, { onlyBelow: opGrahamOnly, minMargin: opMinMargin, onlyPositiveLpa: opPositiveLpa, onlyPositiveVpa: opPositiveVpa })).sort((a, b) => (analisarNumeroGraham(b).safetyMargin ?? -Infinity) - (analisarNumeroGraham(a).safetyMargin ?? -Infinity)), [marketResults, weights, grahamSettings, fiiSettings, opGrahamOnly, opMinMargin, opPositiveLpa, opPositiveVpa]);
+  const rankedOpportunityAssets = useMemo(() => rankedAssets.filter((asset) => asset.type !== "FII" && passesGrahamOpportunityFilters(asset, { onlyBelow: opGrahamOnly, minMargin: opMinMargin, onlyPositiveLpa: opPositiveLpa, onlyPositiveVpa: opPositiveVpa })), [rankedAssets, opGrahamOnly, opMinMargin, opPositiveLpa, opPositiveVpa]);
+  const radarAssets = useMemo(() => rankedAssets.filter((asset) => asset.type !== "FII" && passesRadarFilters(asset, { grahamOnly: radarGrahamOnly, minMargin: radarMinMargin, minPotential: radarMinPotential, maxPl: radarMaxPl, maxPvp: radarMaxPvp, minLiquidity: radarMinLiquidity, minRoe: radarMinRoe, maxDebt: radarMaxDebt })), [rankedAssets, radarGrahamOnly, radarMinMargin, radarMinPotential, radarMaxPl, radarMaxPvp, radarMinLiquidity, radarMinRoe, radarMaxDebt]);
+  const fiiAnalyses = useMemo(() => assets.filter((asset) => asset.type === "FII").map((asset) => ({ asset, analysis: analisarAlfatecFii(asset, fiiSettings) })), [assets, fiiSettings]);
+  const fiiSegments = useMemo(() => Array.from(new Set(fiiAnalyses.map((item) => item.asset.segment))).sort(), [fiiAnalyses]);
+  const fiiOpportunityAnalyses = useMemo(() => fiiAnalyses.filter((item) => passesFiiFilters(item.analysis, fiiFilters)).sort((a, b) => (b.analysis.score ?? -Infinity) - (a.analysis.score ?? -Infinity)), [fiiAnalyses, fiiFilters]);
+  const radarFiiAnalyses = useMemo(() => fiiAnalyses.filter((item) => passesFiiFilters(item.analysis, radarFiiFilters)).sort((a, b) => (b.analysis.score ?? -Infinity) - (a.analysis.score ?? -Infinity)), [fiiAnalyses, radarFiiFilters]);
   const currentUser = useMemo(() => accounts.find((account) => account.id === sessionId) ?? null, [accounts, sessionId]);
   const clients = useMemo(() => accounts.filter((account) => account.role === "CLIENTE"), [accounts]);
   const financial = useMemo(() => buildFinancialSummary(clients, plans, payments), [clients, plans, payments]);
@@ -650,7 +726,7 @@ export default function AlfatecInvestPro() {
   ], []);
 
   function currentSnapshot(): AppStatePayload {
-    return { accounts, plans, payments, portfolio, planPriceHistory, grahamSettings, auditLogs };
+    return { accounts, plans, payments, portfolio, planPriceHistory, grahamSettings, fiiSettings, auditLogs };
   }
 
   function localSnapshot(): AppStatePayload {
@@ -661,6 +737,7 @@ export default function AlfatecInvestPro() {
       portfolio: safeParse<PortfolioPosition[]>(window.localStorage.getItem("alfatec-portfolio"), starterPortfolio),
       planPriceHistory: safeParse<PlanPriceHistory[]>(window.localStorage.getItem("alfatec-plan-price-history"), []),
       grahamSettings: normalizeGrahamSettings(safeParse<Partial<GrahamSettings>>(window.localStorage.getItem("alfatec-graham-settings"), defaultGrahamSettings)),
+      fiiSettings: normalizeFiiSettings(safeParse<Partial<AlfatecFiiSettings>>(window.localStorage.getItem("alfatec-fii-settings"), defaultAlfatecFiiSettings)),
       auditLogs: safeParse<AuditLog[]>(window.localStorage.getItem("alfatec-audit-logs"), [])
     };
   }
@@ -692,6 +769,7 @@ export default function AlfatecInvestPro() {
     setPortfolio(merged.portfolio.length ? merged.portfolio : starterPortfolio);
     setPlanPriceHistory(merged.planPriceHistory);
     setGrahamSettings(merged.grahamSettings);
+    setFiiSettings(merged.fiiSettings);
     setAuditLogs(merged.auditLogs);
     setStateLoaded(true);
     setDatabaseError("");
@@ -716,6 +794,7 @@ export default function AlfatecInvestPro() {
         setPortfolio(merged.portfolio.length ? merged.portfolio : starterPortfolio);
         setPlanPriceHistory(merged.planPriceHistory);
         setGrahamSettings(merged.grahamSettings);
+        setFiiSettings(merged.fiiSettings);
         setAuditLogs(merged.auditLogs);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Banco de dados indisponível.";
@@ -728,6 +807,7 @@ export default function AlfatecInvestPro() {
         setPortfolio(localState.portfolio.length ? localState.portfolio : starterPortfolio);
         setPlanPriceHistory(localState.planPriceHistory);
         setGrahamSettings(localState.grahamSettings);
+        setFiiSettings(localState.fiiSettings);
         setAuditLogs(localState.auditLogs);
         setDatabaseError(message);
         setStateLoaded(true);
@@ -740,12 +820,12 @@ export default function AlfatecInvestPro() {
 
   useEffect(() => {
     if (!stateLoaded) return;
-    const snapshot: AppStatePayload = { accounts, plans, payments, portfolio, planPriceHistory, grahamSettings, auditLogs };
+    const snapshot: AppStatePayload = { accounts, plans, payments, portfolio, planPriceHistory, grahamSettings, fiiSettings, auditLogs };
     const timeout = window.setTimeout(() => {
       void persistAppState(snapshot).catch((error) => setDatabaseError(error instanceof Error ? error.message : "Erro ao salvar no banco."));
     }, 500);
     return () => window.clearTimeout(timeout);
-  }, [stateLoaded, accounts, plans, payments, portfolio, planPriceHistory, grahamSettings, auditLogs]);
+  }, [stateLoaded, accounts, plans, payments, portfolio, planPriceHistory, grahamSettings, fiiSettings, auditLogs]);
 
   useEffect(() => window.localStorage.setItem("alfatec-theme", darkMode ? "dark" : "light"), [darkMode]);
   useEffect(() => setGrahamY(grahamSettings.defaultY), [grahamSettings.defaultY]);
@@ -889,7 +969,8 @@ export default function AlfatecInvestPro() {
 
   function resolveAssetFromSearch(value: string) {
     const clean = normalizeTicker(value);
-    const asset = assets.find((item) => item.ticker === clean) ?? (isTickerLike(clean) ? createGeneratedAsset(clean) : searchAssets(value, "TODOS", assets)[0]);
+    const suggestions = searchAssets(value, "TODOS", assets);
+    const asset = assets.find((item) => item.ticker === clean) ?? suggestions[0] ?? (isTickerLike(clean) ? createGeneratedAsset(clean) : undefined);
     if (asset?.source === "generated" && !extraAssets.some((item) => item.ticker === asset.ticker)) setExtraAssets((current) => [asset, ...current]);
     return asset;
   }
@@ -985,6 +1066,13 @@ export default function AlfatecInvestPro() {
     setGrahamSettings(next);
     logAudit("configuracao_graham", "Parâmetros do Valuation Graham atualizados.", "medio");
   }
+
+  function saveFiiSettings(patch: Partial<AlfatecFiiSettings>) {
+    const next = normalizeFiiSettings({ ...fiiSettings, ...patch, updatedAt: new Date().toISOString(), updatedBy: currentUser?.name ?? "Admin" });
+    setFiiSettings(next);
+    logAudit("configuracao_alfatec_fiis", "Parâmetros do Método AlfaTec FIIs atualizados.", "medio");
+  }
+
 
   function addPayment(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1086,6 +1174,31 @@ export default function AlfatecInvestPro() {
     ].join(","));
     downloadText("carteira-alfatec-invest-pro.csv", header + rows.join("\n"), "text/csv;charset=utf-8");
   }
+
+  function exportFiiReportCsv() {
+    const header = "ticker,nome,segmento,tipo,score,classificacao,confianca,pvp,dy_recorrente,premio_risco,qualidade,renda,risco,valuation,gestao,liquidez,diversificacao\n";
+    const rows = fiiAnalyses.map(({ asset, analysis }) => [
+      asset.ticker,
+      `"${asset.name.replace(/"/g, "'")}"`,
+      `"${asset.segment}"`,
+      `"${analysis.kindLabel}"`,
+      analysis.score ?? "",
+      analysis.classification,
+      analysis.confidence,
+      fiiNumeric(analysis.pvp.value) ?? "",
+      fiiNumeric(analysis.recurrentDividendYield.value) ?? "",
+      fiiNumeric(analysis.riskPremium.value) ?? "",
+      analysis.scores.qualidade ?? "",
+      analysis.scores.renda ?? "",
+      analysis.scores.risco ?? "",
+      analysis.scores.valuation ?? "",
+      analysis.scores.gestao ?? "",
+      analysis.scores.liquidez ?? "",
+      analysis.scores.diversificacao ?? ""
+    ].join(","));
+    downloadText("metodo-alfatec-fiis.csv", header + rows.join("\n"), "text/csv;charset=utf-8");
+  }
+
 
   const dashboardCards = [
     { label: "Patrimônio total", value: money.format(portfolioAnalysis.totalEquity), icon: WalletCards, tone: "teal" },
@@ -1292,7 +1405,7 @@ export default function AlfatecInvestPro() {
                   {marketQuoteMessage && <div className={cls("rounded-3xl border p-5 text-sm font-bold", marketQuoteStatus === "error" ? "border-amber-400/40 bg-amber-500/10 text-amber-600 dark:text-amber-300" : "border-cyan-400/40 bg-cyan-500/10 text-cyan-700 dark:text-cyan-200")}>{marketQuoteStatus === "loading" ? "Consultando cotação externa..." : marketQuoteMessage}</div>}
                 </div>
               </PremiumCard>
-              <AssetPanel asset={selectedAsset} favorites={favorites} setFavorites={setFavorites} onAddToPortfolio={(asset) => setPortfolio((current) => [{ id: crypto.randomUUID(), ticker: asset.ticker, quantity: 1, averagePrice: asset.price, broker: "Manual", purchaseDate: todayIso() }, ...current])} />
+              <AssetPanel asset={selectedAsset} favorites={favorites} setFavorites={setFavorites} onAddToPortfolio={(asset) => setPortfolio((current) => [{ id: crypto.randomUUID(), ticker: asset.ticker, quantity: 1, averagePrice: asset.price, broker: "Manual", purchaseDate: todayIso() }, ...current])} onOpenFiiAnalysis={(asset) => { setFiiAsset(asset); setFiiSearch(asset.ticker); setClientModule("alfatec_fiis"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_fiis"); }} />
             </div>
           </Section>
         )}
@@ -1322,9 +1435,15 @@ export default function AlfatecInvestPro() {
                   <div className="mt-4 space-y-3">{opportunityResults.slice(0, 8).map((asset, index) => <RankingRow key={asset.ticker} asset={asset} index={index + 1} onClick={() => selectAsset(asset, "mercado")} />)}</div>
                 </PremiumCard>
               </div>
-              <PremiumCard title="Melhores scores do mercado" description="Classificação automatizada com critérios transparentes. Não é recomendação personalizada." icon={TrendingUp}>
+              <PremiumCard title="Melhores scores do mercado" description="Classificação automatizada com critérios transparentes. Não ? recomendação personalizada." icon={TrendingUp}>
                 <GrahamOpportunityTable assets={rankedOpportunityAssets.slice(0, 12)} onSelect={(asset) => selectAsset(asset, "mercado")} />
               </PremiumCard>
+              <div className="xl:col-span-2">
+                <PremiumCard title="Oportunidades em FIIs" description="Score AlfaTec FIIs, renda recorrente, risco, valuation, liquidez e confiança dos dados." icon={Building2}>
+                  <FiiOpportunityFilters value={fiiFilters} onChange={(patch) => setFiiFilters((current) => ({ ...current, ...patch }))} segments={fiiSegments} />
+                  <div className="mt-4"><FiiOpportunitiesTable items={fiiOpportunityAnalyses.slice(0, 12)} onSelect={(asset) => { setFiiAsset(asset); setFiiSearch(asset.ticker); setClientModule("alfatec_fiis"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_fiis"); }} /></div>
+                </PremiumCard>
+              </div>
             </div>
           </Section>
         )}
@@ -1341,7 +1460,7 @@ export default function AlfatecInvestPro() {
                 <div className="mt-5 grid gap-4 lg:grid-cols-2"><PerformancePill asset={assetA} value={returnA} /><PerformancePill asset={assetB} value={returnB} /></div>
                 <div className="mt-5 h-[430px]"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={comparison}><CartesianGrid strokeDasharray="3 3" opacity={0.16} /><XAxis dataKey="label" minTickGap={28} /><YAxis yAxisId="left" unit="%" /><YAxis yAxisId="right" orientation="right" tickFormatter={(value) => compactMoney.format(Number(value))} /><Tooltip formatter={(value, name) => name === "Volume" ? compactMoney.format(Number(value)) : `${value}%`} /><Legend /><Bar yAxisId="right" dataKey="volumeA" name="Volume" fill="#334155" opacity={0.22} /><Line yAxisId="left" type="monotone" dataKey={assetA.ticker} name={`${assetA.ticker} %`} stroke="#14b8a6" strokeWidth={3} dot={false} /><Line yAxisId="left" type="monotone" dataKey={assetB.ticker} name={`${assetB.ticker} %`} stroke="#38bdf8" strokeWidth={3} dot={false} /></ComposedChart></ResponsiveContainer></div>
                 <ComparisonTable a={assetA} b={assetB} />
-                <GrahamComparison a={assetA} b={assetB} />
+                {assetA.type === "FII" && assetB.type === "FII" ? <FiiComparison a={assetA} b={assetB} assets={assets} settings={fiiSettings} /> : <GrahamComparison a={assetA} b={assetB} />}
               </PremiumCard>
               <ComparisonRecommendationCard recommendation={comparisonRecommendation} a={assetA} b={assetB} returnA={returnA} returnB={returnB} />
             </div>
@@ -1369,13 +1488,21 @@ export default function AlfatecInvestPro() {
 
         {clientModule === "graham_valuation" && <GrahamValuationSection assets={assets} selectedAsset={grahamAsset} search={grahamSearch} setSearch={setGrahamSearch} setSelectedAsset={setGrahamAsset} currentUser={currentUser} settings={grahamSettings} saveSettings={saveGrahamSettings} growth={grahamGrowth} setGrowth={setGrahamGrowth} y={grahamY} setY={setGrahamY} />}
 
+        {clientModule === "alfatec_fiis" && <AlfatecFiiSection assets={assets} selectedAsset={fiiAsset} search={fiiSearch} setSearch={setFiiSearch} setSelectedAsset={setFiiAsset} currentUser={currentUser} settings={fiiSettings} saveSettings={saveFiiSettings} filters={fiiFilters} setFilters={setFiiFilters} segments={fiiSegments} opportunities={fiiOpportunityAnalyses} />}
+
         {clientModule === "plano" && <ClientPlanSection user={currentUser} plans={plans} payments={payments} />}
 
         {clientModule === "radar" && (
           <Section title="Radar IA" subtitle="Ranking de oportunidades com score transparente e configurável." eyebrow="Inteligência automatizada">
             <div className="grid gap-6 xl:grid-cols-[0.75fr_1.25fr]">
               <PremiumCard title="Critérios do score" description="Ajuste pesos e filtros do Radar IA." icon={Settings}>{Object.entries(weights).map(([key, value]) => <WeightSlider key={key} label={radarLabel(key)} value={value} onChange={(next) => setWeights((current) => ({ ...current, [key]: next }))} />)}<RadarGrahamFilters grahamOnly={radarGrahamOnly} setGrahamOnly={setRadarGrahamOnly} minMargin={radarMinMargin} setMinMargin={setRadarMinMargin} minPotential={radarMinPotential} setMinPotential={setRadarMinPotential} maxPl={radarMaxPl} setMaxPl={setRadarMaxPl} maxPvp={radarMaxPvp} setMaxPvp={setRadarMaxPvp} minLiquidity={radarMinLiquidity} setMinLiquidity={setRadarMinLiquidity} minRoe={radarMinRoe} setMinRoe={setRadarMinRoe} maxDebt={radarMaxDebt} setMaxDebt={setRadarMaxDebt} /></PremiumCard>
-              <PremiumCard title="Ranking geral" description="Número de Graham contribui no máximo com 15% do score." icon={BrainCircuit}><div className="space-y-3">{radarAssets.slice(0, 15).map((asset, index) => <RankingRow key={asset.ticker} asset={asset} index={index + 1} onClick={() => selectAsset(asset, "mercado")} />)}</div></PremiumCard>
+              <PremiumCard title="Ranking geral" description="Número de Graham contribui no máximo com 15% do score e não é usado para FIIs." icon={BrainCircuit}><div className="space-y-3">{radarAssets.slice(0, 15).map((asset, index) => <RankingRow key={asset.ticker} asset={asset} index={index + 1} onClick={() => selectAsset(asset, "mercado")} />)}</div></PremiumCard>
+              <div className="xl:col-span-2">
+                <PremiumCard title="Radar IA - FIIs" description="Filtros e ranking com o Método AlfaTec FIIs, identificado separadamente das ações." icon={Building2}>
+                  <FiiOpportunityFilters value={radarFiiFilters} onChange={(patch) => setRadarFiiFilters((current) => ({ ...current, ...patch }))} segments={fiiSegments} />
+                  <div className="mt-4"><FiiRadarTable items={radarFiiAnalyses.slice(0, 12)} onSelect={(asset) => { setFiiAsset(asset); setFiiSearch(asset.ticker); setClientModule("alfatec_fiis"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_fiis"); }} /></div>
+                </PremiumCard>
+              </div>
             </div>
           </Section>
         )}
@@ -1386,6 +1513,13 @@ export default function AlfatecInvestPro() {
               <div className="grid gap-4 sm:grid-cols-3"><InfoTile label="Patrimônio" value={money.format(portfolioAnalysis.totalEquity)} /><InfoTile label="Lucro/Prejuízo" value={money.format(portfolioAnalysis.totalProfit)} /><InfoTile label="Dividendos/ano" value={money.format(portfolioAnalysis.projectedDividendsYear)} /></div>
               <div className="mt-5 flex flex-wrap gap-3"><button onClick={exportPortfolioCsv} className="rounded-2xl bg-teal-500 px-5 py-3 font-bold text-white"><Download className="mr-2 inline h-4 w-4" />Exportar CSV</button><button onClick={() => window.print()} className="rounded-2xl bg-slate-950 px-5 py-3 font-bold text-white dark:bg-white dark:text-slate-950">Imprimir / PDF</button></div>
             </PremiumCard>
+            <div className="mt-6">
+              <PremiumCard title="Relatório de FIIs" description="Score AlfaTec FIIs, classificação, confiança, pontos positivos, riscos, fontes e datas." icon={Building2}>
+                <div className="grid gap-3 sm:grid-cols-3"><InfoTile label="FIIs analisados" value={String(fiiAnalyses.length)} /><InfoTile label="Maior score" value={fiiOpportunityAnalyses[0]?.asset.ticker ?? "-"} /><InfoTile label="Média dos scores" value={fiiAnalyses.filter((item) => item.analysis.score !== null).length ? `${Math.round(fiiAnalyses.reduce((sum, item) => sum + (item.analysis.score ?? 0), 0) / fiiAnalyses.filter((item) => item.analysis.score !== null).length)}/100` : "-"} /></div>
+                <div className="mt-4"><FiiOpportunitiesTable items={fiiOpportunityAnalyses.slice(0, 8)} onSelect={(asset) => { setFiiAsset(asset); setFiiSearch(asset.ticker); setClientModule("alfatec_fiis"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_fiis"); }} /></div>
+                <div className="mt-5 flex flex-wrap gap-3"><button onClick={exportFiiReportCsv} className="rounded-2xl bg-teal-500 px-5 py-3 font-bold text-white"><Download className="mr-2 inline h-4 w-4" />Exportar CSV de FIIs</button><button onClick={() => window.print()} className="rounded-2xl bg-slate-950 px-5 py-3 font-bold text-white dark:bg-white dark:text-slate-950">Imprimir / PDF</button></div>
+              </PremiumCard>
+            </div>
           </Section>
         )}
 
@@ -1612,10 +1746,15 @@ function MetricCard({ label, value, icon: Icon, tone }: { label: string; value: 
 function AssetCard({ asset, favorites, onSelect, onFavorite }: { asset: Asset; favorites: string[]; onSelect: () => void; onFavorite: () => void }) {
   return <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/5"><div className="flex items-start justify-between gap-3"><button onClick={onSelect} className="text-left"><p className="text-xs text-slate-500 dark:text-slate-300">{typeLabels[asset.type]} • {asset.segment}</p><h3 className="mt-1 text-xl font-black">{asset.ticker}</h3><p className="text-sm text-slate-500 dark:text-slate-300">{asset.name}</p>{asset.source === "external" && <p className="mt-2 text-xs font-bold text-cyan-600 dark:text-cyan-300">Fonte: Google Finance via provedor externo</p>}</button><button onClick={onFavorite} className="rounded-xl bg-white p-2 dark:bg-white/10"><Star className={cls("h-4 w-4", favorites.includes(asset.ticker) && "fill-amber-400 text-amber-400")} /></button></div><div className="mt-4 grid grid-cols-3 gap-2"><InfoTile label="Preço" value={money.format(asset.price)} /><InfoTile label="Dia" value={pct(asset.changeDay)} /><InfoTile label="Score" value={`${asset.score}/100`} /></div></div>;
 }
-function AssetPanel({ asset, favorites, setFavorites, onAddToPortfolio }: { asset: Asset; favorites: string[]; setFavorites: React.Dispatch<React.SetStateAction<string[]>>; onAddToPortfolio: (asset: Asset) => void }) {
+function AssetPanel({ asset, favorites, setFavorites, onAddToPortfolio, onOpenFiiAnalysis }: { asset: Asset; favorites: string[]; setFavorites: React.Dispatch<React.SetStateAction<string[]>>; onAddToPortfolio: (asset: Asset) => void; onOpenFiiAnalysis?: (asset: Asset) => void }) {
   const isFavorite = favorites.includes(asset.ticker);
-  return <PremiumCard title="Página do ativo" description="Informações, indicadores, IA e fundamentos." icon={ShieldCheck}><div className="rounded-3xl bg-gradient-to-br from-slate-950 to-slate-800 p-5 text-white"><div className="flex items-start justify-between gap-4"><div><p className="text-sm text-cyan-300">{typeLabels[asset.type]} • {asset.segment}</p><h3 className="mt-1 text-3xl font-black">{asset.ticker}</h3><p className="text-slate-300">{asset.name}</p></div><button onClick={() => setFavorites((current) => isFavorite ? current.filter((ticker) => ticker !== asset.ticker) : [asset.ticker, ...current])} className="rounded-2xl bg-white/10 p-3 hover:bg-white/20"><Star className={cls("h-5 w-5", isFavorite && "fill-amber-400 text-amber-400")} /></button></div><div className="mt-6 grid grid-cols-3 gap-3"><InfoTile dark label="Preço" value={money.format(asset.price)} /><InfoTile dark label="Ano" value={pct(asset.changeYear)} /><InfoTile dark label="Score" value={`${asset.score}/100`} /></div></div><div className="mt-4 grid grid-cols-2 gap-3"><InfoTile label="Mercado" value={asset.market} /><InfoTile label="Setor" value={asset.sector} /><InfoTile label="Liquidez" value={compactMoney.format(asset.liquidity)} /><InfoTile label="Risco" value={asset.risk} /><InfoTile label="Dividend Yield" value={pct(asset.metrics.dividendYield)} /><InfoTile label="P/VP" value={metric(asset.metrics.pvp)} /><InfoTile label="P/L" value={metric(asset.metrics.pl)} /><InfoTile label="ROE" value={pct(asset.metrics.roe)} /></div><div className="mt-4 rounded-3xl border border-slate-200 p-4 dark:border-white/10"><p className="mb-2 text-sm font-black">Resumo IA do ativo</p><p className="text-sm text-slate-600 dark:text-slate-300">{asset.summary}</p><ul className="mt-3 space-y-2">{generateAiNotes(asset).map((note) => <li key={note} className="flex gap-2 text-sm text-slate-600 dark:text-slate-300"><ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-cyan-500" />{note}</li>)}</ul></div>{asset.source === "external" && <p className="mt-3 text-sm font-bold text-cyan-600 dark:text-cyan-300">Fonte: Google Finance via provedor externo</p>}<a href={googleFinanceUrl(asset)} target="_blank" rel="noreferrer" className="mt-4 flex w-full items-center justify-center rounded-2xl border border-slate-200 px-4 py-3 font-bold text-slate-700 transition hover:bg-slate-50 dark:border-white/10 dark:text-slate-100 dark:hover:bg-white/10">Abrir no Google Finanças</a><button onClick={() => onAddToPortfolio(asset)} className="mt-3 w-full rounded-2xl bg-cyan-500 px-4 py-3 font-bold text-white">Adicionar à carteira</button></PremiumCard>;
+  return <PremiumCard title="Página do ativo" description="Informações, indicadores, IA e fundamentos." icon={ShieldCheck}><div className="rounded-3xl bg-gradient-to-br from-slate-950 to-slate-800 p-5 text-white"><div className="flex items-start justify-between gap-4"><div><p className="text-sm text-cyan-300">{typeLabels[asset.type]} • {asset.segment}</p><h3 className="mt-1 text-3xl font-black">{asset.ticker}</h3><p className="text-slate-300">{asset.name}</p></div><button onClick={() => setFavorites((current) => isFavorite ? current.filter((ticker) => ticker !== asset.ticker) : [asset.ticker, ...current])} className="rounded-2xl bg-white/10 p-3 hover:bg-white/20"><Star className={cls("h-5 w-5", isFavorite && "fill-amber-400 text-amber-400")} /></button></div><div className="mt-6 grid grid-cols-3 gap-3"><InfoTile dark label="Preço" value={money.format(asset.price)} /><InfoTile dark label="Ano" value={pct(asset.changeYear)} /><InfoTile dark label="Score" value={`${asset.score}/100`} /></div></div><div className="mt-4 grid grid-cols-2 gap-3"><InfoTile label="Mercado" value={asset.market} /><InfoTile label="Setor" value={asset.sector} /><InfoTile label="Liquidez" value={compactMoney.format(asset.liquidity)} /><InfoTile label="Risco" value={asset.risk} /><InfoTile label="Dividend Yield" value={pct(asset.metrics.dividendYield)} /><InfoTile label="P/VP" value={metric(asset.metrics.pvp)} /><InfoTile label="P/L" value={metric(asset.metrics.pl)} /><InfoTile label="ROE" value={pct(asset.metrics.roe)} /></div><div className="mt-4 rounded-3xl border border-slate-200 p-4 dark:border-white/10"><p className="mb-2 text-sm font-black">Resumo IA do ativo</p><p className="text-sm text-slate-600 dark:text-slate-300">{asset.summary}</p><ul className="mt-3 space-y-2">{generateAiNotes(asset).map((note) => <li key={note} className="flex gap-2 text-sm text-slate-600 dark:text-slate-300"><ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-cyan-500" />{note}</li>)}</ul></div>{asset.source === "external" && <p className="mt-3 text-sm font-bold text-cyan-600 dark:text-cyan-300">Fonte: Google Finance via provedor externo</p>}{asset.type === "FII" && <FiiAssetMiniSummary asset={asset} onOpen={() => onOpenFiiAnalysis?.(asset)} />}<a href={googleFinanceUrl(asset)} target="_blank" rel="noreferrer" className="mt-4 flex w-full items-center justify-center rounded-2xl border border-slate-200 px-4 py-3 font-bold text-slate-700 transition hover:bg-slate-50 dark:border-white/10 dark:text-slate-100 dark:hover:bg-white/10">Abrir no Google Finanças</a><button onClick={() => onAddToPortfolio(asset)} className="mt-3 w-full rounded-2xl bg-cyan-500 px-4 py-3 font-bold text-white">Adicionar à carteira</button></PremiumCard>;
 }
+function FiiAssetMiniSummary({ asset, onOpen }: { asset: Asset; onOpen: () => void }) {
+  const analysis = analisarAlfatecFii(asset);
+  return <div className="mt-4 rounded-3xl border border-cyan-400/30 bg-cyan-500/10 p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-black uppercase tracking-[0.18em] text-cyan-600 dark:text-cyan-300">Método AlfaTec FIIs</p><p className="mt-1 font-black">Score AlfaTec FIIs: {analysis.score === null ? "dados insuficientes" : `${analysis.score}/100`} ? {analysis.classification}</p><p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{analysis.kindLabel}. Confiança: {analysis.confidence === "Media" ? "Média" : analysis.confidence}. {analysis.valuationInterpretation}.</p></div><button type="button" onClick={onOpen} className="rounded-2xl bg-cyan-500 px-4 py-3 text-sm font-bold text-white">Ver análise completa</button></div></div>;
+}
+
 function InfoTile({ label, value, dark = false }: { label: string; value: string; dark?: boolean }) {
   return <div className={cls("rounded-2xl p-3", dark ? "bg-white/10" : "bg-slate-50 dark:bg-white/5")}><p className={cls("text-xs", dark ? "text-slate-300" : "text-slate-500")}>{label}</p><p className="mt-1 font-black">{value}</p></div>;
 }
@@ -1697,6 +1836,53 @@ function GrahamValuationSection({ assets, selectedAsset, search, setSearch, setS
   return <Section title="Valuation Graham" subtitle="Dois métodos de Benjamin Graham com fontes, datas, premissas e limitações visíveis." eyebrow="Valuation"><div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]"><div className="space-y-6"><PremiumCard title="Pesquisar ativo" description="Selecione uma ação para calcular os métodos." icon={Search}><SearchBox label="Ativo" value={search} onChange={setSearch} assets={assets} onSelect={(asset) => { setSelectedAsset(asset); setSearch(asset.ticker); }} /><div className="mt-4 grid gap-3 sm:grid-cols-2"><InfoTile label="Ativo" value={`${selectedAsset.ticker} - ${selectedAsset.name}`} /><InfoTile label="Última atualização" value={new Date(selectedAsset.lastUpdatedAt ?? selectedAsset.updatedAt).toLocaleString("pt-BR")} /><InfoTile label="Fonte" value={selectedAsset.sourceLabel ?? (selectedAsset.source === "external" ? "Google Finance via provedor externo" : "Base interna/fornecedor")} /><InfoTile label="Tipo" value={typeLabels[selectedAsset.type]} /></div></PremiumCard>{currentUser.role === "ADMIN" && <PremiumCard title="Configuração administrativa" description="Parâmetros oficiais para Y, crescimento e score." icon={Settings}><div className="grid gap-3"><Input label="Y padrão (%)" type="number" step="0.1" value={settings.defaultY} onChange={(e) => saveSettings({ defaultY: Number(e.target.value) })} /><Input label="Crescimento mínimo (%)" type="number" value={settings.minGrowth} onChange={(e) => saveSettings({ minGrowth: Number(e.target.value) })} /><Input label="Crescimento máximo recomendado (%)" type="number" value={settings.maxGrowth} onChange={(e) => saveSettings({ maxGrowth: Number(e.target.value) })} /><Input label="Peso Graham no score" type="number" max="15" value={settings.scoreWeight} onChange={(e) => saveSettings({ scoreWeight: Math.min(15, Number(e.target.value)) })} /><Toggle label="Cálculo ativo" checked={settings.enabled} onChange={(value) => saveSettings({ enabled: value })} /><Toggle label="Cliente edita crescimento" checked={settings.clientsCanEditGrowth} onChange={(value) => saveSettings({ clientsCanEditGrowth: value })} /><Toggle label="Cliente edita Y" checked={settings.clientsCanEditY} onChange={(value) => saveSettings({ clientsCanEditY: value })} /></div><p className="mt-3 text-xs text-slate-500 dark:text-slate-400">Y exibido como parâmetro configurado pelo administrador quando não houver integração confiável para títulos corporativos AAA.</p></PremiumCard>}<GrahamExplanation /></div><div className="space-y-6"><GrahamNumberCard analysis={graham} /><GrahamGrowthCard price={selectedAsset.price} lpa={inputs.lpa} growth={growth} y={y} value={growthValue} potential={growthPotential} safetyMargin={growthMargin} sourceLabel={`Crescimento informado pelo usuário; Y: Parâmetro configurado pelo administrador`} updatedAt={new Date().toISOString()} scenarios={scenarios} warning={warning} canEdit={canEdit} onGrowthChange={(value) => settings.clientsCanEditGrowth || currentUser.role === "ADMIN" ? setGrowth(value) : undefined} onYChange={(value) => settings.clientsCanEditY || currentUser.role === "ADMIN" ? setY(value) : undefined} /></div></div></Section>;
 }
 
+
+function AlfatecFiiSection({ assets, selectedAsset, search, setSearch, setSelectedAsset, currentUser, settings, saveSettings, filters, setFilters, segments, opportunities }: { assets: Asset[]; selectedAsset: Asset; search: string; setSearch: (value: string) => void; setSelectedAsset: (asset: Asset) => void; currentUser: Account; settings: AlfatecFiiSettings; saveSettings: (patch: Partial<AlfatecFiiSettings>) => void; filters: FiiOpportunityFilterState; setFilters: React.Dispatch<React.SetStateAction<FiiOpportunityFilterState>>; segments: string[]; opportunities: Array<{ asset: Asset; analysis: AlfatecFiiAnalysis }> }) {
+  const analysis = analisarAlfatecFii(selectedAsset, settings);
+  const comparison = compararFiiPorSegmento(selectedAsset, assets, settings);
+  const kindWeights = settings.weightsByKind[analysis.kind] ?? settings.weightsByKind.outro;
+  const fiiAssets = assets.filter((asset) => asset.type === "FII");
+
+  function updateKindWeight(key: keyof typeof kindWeights, value: number) {
+    saveSettings({ weightsByKind: { ...settings.weightsByKind, [analysis.kind]: { ...kindWeights, [key]: value } } });
+  }
+
+  return <Section title="Método AlfaTec FIIs" subtitle="Análise própria para fundos imobiliários, sem usar Graham, PEG ou P/L como método principal." eyebrow="Fundos imobiliários"><div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]"><div className="space-y-6"><PremiumCard title="Pesquisar FII" description="Selecione um fundo imobiliário real para analisar." icon={Search}><SearchBox label="Ticker ou nome do FII" value={search} onChange={setSearch} assets={fiiAssets} onSelect={(asset) => { setSelectedAsset(asset); setSearch(asset.ticker); }} /><div className="mt-4 grid gap-3 sm:grid-cols-2"><InfoTile label="Ativo" value={`${selectedAsset.ticker} - ${selectedAsset.name}`} /><InfoTile label="Tipo" value={analysis.kindLabel} /><InfoTile label="Última atualização" value={new Date(analysis.updatedAt).toLocaleString("pt-BR")} /><InfoTile label="Fonte do preço" value={analysis.price.source} /></div></PremiumCard><PremiumCard title="Entenda o método" description="Critérios, limitações e leitura correta da nota." icon={ShieldCheck}><div className="space-y-3 text-sm text-slate-600 dark:text-slate-300"><p>O Método AlfaTec FIIs combina indicadores financeiros, operacionais, patrimoniais e de risco. A ponderação muda conforme o tipo do fundo: tijolo, papel, híbrido, fundo de fundos, renda urbana, desenvolvimento, infraestrutura ou outro tipo compatível.</p><p>O método considera P/VP ajustado, Dividend Yield recorrente, prêmio de risco, liquidez, diversificação, risco do segmento, qualidade de dados e comparação com fundos semelhantes. P/VP abaixo de 1 e Dividend Yield alto nunca são usados isoladamente como oportunidade.</p><p className="rounded-2xl bg-amber-500/10 p-3 font-semibold text-amber-700 dark:text-amber-300">O Método AlfaTec FIIs é um modelo analítico próprio. A nota gerada não representa garantia de rendimento, valorização ou recomendação personalizada de investimento.</p></div></PremiumCard>{currentUser.role === "ADMIN" && <PremiumCard title="Configurações do Método AlfaTec FIIs" description="Pesos, taxa de referência e ativação do método." icon={Settings}><div className="grid gap-3"><Toggle label="Método ativo" checked={settings.enabled} onChange={(value) => saveSettings({ enabled: value })} /><Input label="Taxa de referência (%)" type="number" step="0.1" value={settings.referenceRate} onChange={(e) => saveSettings({ referenceRate: Number(e.target.value), referenceRateSource: "Parâmetro configurado pelo administrador" })} /><Input label="Fonte da taxa" value={settings.referenceRateSource} onChange={(e) => saveSettings({ referenceRateSource: e.target.value })} /><Select label="Confiança mínima" value={settings.minimumConfidence} onChange={(e) => saveSettings({ minimumConfidence: e.target.value as AlfatecFiiSettings["minimumConfidence"] })}><option value="Alta">Alta</option><option value="Media">Média</option><option value="Baixa">Baixa</option><option value="Insuficiente">Insuficiente</option></Select><div className="rounded-3xl bg-slate-50 p-4 dark:bg-white/5"><p className="mb-2 text-sm font-black">Pesos para {analysis.kindLabel}</p>{(Object.keys(kindWeights) as Array<keyof typeof kindWeights>).map((key) => <WeightSlider key={key} label={`${key} (${kindWeights[key]}%)`} value={kindWeights[key]} onChange={(value) => updateKindWeight(key, value)} />)}</div></div></PremiumCard>}</div><div className="space-y-6"><AlfatecFiiScoreCard analysis={analysis} /><FiiScoreBreakdown analysis={analysis} /><FiiSegmentComparison comparison={comparison} ticker={analysis.ticker} score={analysis.score} /><FiiDataSourceInfo analysis={analysis} /><PremiumCard title="Comparação com FIIs filtrados" description="Lista rápida com fundos compatíveis e filtros do método." icon={TrendingUp}><FiiOpportunityFilters value={filters} onChange={(patch) => setFilters((current) => ({ ...current, ...patch }))} segments={segments} /><div className="mt-4"><FiiOpportunitiesTable items={opportunities.slice(0, 8)} onSelect={(asset) => { setSelectedAsset(asset); setSearch(asset.ticker); }} /></div></PremiumCard></div></div></Section>;
+}
+
+function FiiOpportunitiesTable({ items, onSelect }: { items: Array<{ asset: Asset; analysis: AlfatecFiiAnalysis }>; onSelect: (asset: Asset) => void }) {
+  return <div className="overflow-x-auto"><table className="min-w-full text-sm"><thead><tr className="text-left text-slate-500 dark:text-slate-300"><th className="p-3">Ticker</th><th className="p-3">Tipo</th><th className="p-3">Preço</th><th className="p-3">P/VP</th><th className="p-3">DY recorrente</th><th className="p-3">Prêmio</th><th className="p-3">Score AlfaTec FIIs</th><th className="p-3">Confiança</th><th className="p-3">Classificação</th></tr></thead><tbody>{items.map(({ asset, analysis }) => <tr key={asset.ticker} onClick={() => onSelect(asset)} className="cursor-pointer border-t border-slate-100 transition hover:bg-slate-50 dark:border-white/10 dark:hover:bg-white/5"><td className="p-3 font-black">{asset.ticker}<p className="text-xs font-normal text-slate-500 dark:text-slate-300">{asset.name}</p></td><td className="p-3">{analysis.kindLabel}</td><td className="p-3">{money.format(asset.price)}</td><td className="p-3">{metric(fiiNumeric(analysis.pvp.value))}</td><td className="p-3">{pct(fiiNumeric(analysis.recurrentDividendYield.value))}</td><td className="p-3">{fiiNumeric(analysis.riskPremium.value) === undefined ? "-" : pp(fiiNumeric(analysis.riskPremium.value))}</td><td className="p-3 font-black text-cyan-600 dark:text-cyan-300">{analysis.score === null ? "Dados insuficientes" : `${analysis.score}/100`}</td><td className="p-3">{analysis.confidence === "Media" ? "Média" : analysis.confidence}</td><td className="p-3">{analysis.classification}</td></tr>)}</tbody></table>{items.length === 0 && <p className="p-4 text-sm text-slate-500 dark:text-slate-400">Nenhum FII atende aos filtros atuais.</p>}<p className="mt-4 rounded-2xl bg-cyan-500/10 p-3 text-xs font-semibold text-cyan-700 dark:text-cyan-300">Oportunidades em FIIs usam o Método AlfaTec FIIs. Graham, PEG e P/L não são aplicados como método principal para fundos imobiliários.</p></div>;
+}
+
+function FiiComparison({ a, b, assets, settings }: { a: Asset; b: Asset; assets: Asset[]; settings: AlfatecFiiSettings }) {
+  const analysisA = analisarAlfatecFii(a, settings);
+  const analysisB = analisarAlfatecFii(b, settings);
+  const best = (analysisA.score ?? -Infinity) >= (analysisB.score ?? -Infinity) ? analysisA : analysisB;
+  const rows = [
+    ["Score AlfaTec FIIs", analysisA.score === null ? "Dados insuficientes" : `${analysisA.score}/100`, analysisB.score === null ? "Dados insuficientes" : `${analysisB.score}/100`],
+    ["Qualidade", metric(analysisA.scores.qualidade ?? undefined), metric(analysisB.scores.qualidade ?? undefined)],
+    ["Renda", metric(analysisA.scores.renda ?? undefined), metric(analysisB.scores.renda ?? undefined)],
+    ["Risco", metric(analysisA.scores.risco ?? undefined), metric(analysisB.scores.risco ?? undefined)],
+    ["Valuation", metric(analysisA.scores.valuation ?? undefined), metric(analysisB.scores.valuation ?? undefined)],
+    ["Gestão", metric(analysisA.scores.gestao ?? undefined), metric(analysisB.scores.gestao ?? undefined)],
+    ["Liquidez", metric(analysisA.scores.liquidez ?? undefined), metric(analysisB.scores.liquidez ?? undefined)],
+    ["Diversificação", metric(analysisA.scores.diversificacao ?? undefined), metric(analysisB.scores.diversificacao ?? undefined)],
+    ["P/VP", metric(fiiNumeric(analysisA.pvp.value)), metric(fiiNumeric(analysisB.pvp.value))],
+    ["DY recorrente", pct(fiiNumeric(analysisA.recurrentDividendYield.value)), pct(fiiNumeric(analysisB.recurrentDividendYield.value))],
+    ["Prêmio de risco", fiiNumeric(analysisA.riskPremium.value) === undefined ? "Dado indisponível" : pp(fiiNumeric(analysisA.riskPremium.value)), fiiNumeric(analysisB.riskPremium.value) === undefined ? "Dado indisponível" : pp(fiiNumeric(analysisB.riskPremium.value))],
+    ["Vacância", analysisA.vacancy.status === "nao_aplicavel" ? "Não aplicável ao tipo deste fundo" : pct(fiiNumeric(analysisA.vacancy.value)), analysisB.vacancy.status === "nao_aplicavel" ? "Não aplicável ao tipo deste fundo" : pct(fiiNumeric(analysisB.vacancy.value))],
+    ["LTV", analysisA.ltv.status === "nao_aplicavel" ? "Não aplicável ao tipo deste fundo" : "Dado indisponível", analysisB.ltv.status === "nao_aplicavel" ? "Não aplicável ao tipo deste fundo" : "Dado indisponível"],
+    ["Confiança", analysisA.confidence === "Media" ? "Média" : analysisA.confidence, analysisB.confidence === "Media" ? "Média" : analysisB.confidence]
+  ];
+  const comparisonA = compararFiiPorSegmento(a, assets, settings);
+  const comparisonB = compararFiiPorSegmento(b, assets, settings);
+  return <div className="mt-5 rounded-3xl border border-slate-200 p-4 dark:border-white/10"><h4 className="font-black">Comparação pelo Método AlfaTec FIIs</h4><p className="mt-2 rounded-2xl bg-cyan-500/10 p-3 text-sm font-semibold text-cyan-700 dark:text-cyan-300">Maior score segundo este método: {best.score === null ? "dados insuficientes" : best.ticker}. Isso não declara automaticamente o melhor investimento; serve como leitura analítica entre fundos compatíveis.</p><div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 text-sm dark:border-white/10"><div className="grid grid-cols-3 bg-slate-50 p-3 font-bold dark:bg-white/5"><span>Critério</span><span>{a.ticker}</span><span>{b.ticker}</span></div>{rows.map((row) => <div key={row[0]} className="grid grid-cols-3 border-t border-slate-100 p-3 dark:border-white/10"><span className="text-slate-500 dark:text-slate-300">{row[0]}</span><strong>{row[1]}</strong><strong>{row[2]}</strong></div>)}</div><div className="mt-4 grid gap-4 lg:grid-cols-2"><FiiSegmentComparison comparison={comparisonA} ticker={a.ticker} score={analysisA.score} /><FiiSegmentComparison comparison={comparisonB} ticker={b.ticker} score={analysisB.score} /></div></div>;
+}
+
+function FiiRadarTable({ items, onSelect }: { items: Array<{ asset: Asset; analysis: AlfatecFiiAnalysis }>; onSelect: (asset: Asset) => void }) {
+  return <div className="space-y-3">{items.map(({ asset, analysis }, index) => <button key={asset.ticker} onClick={() => onSelect(asset)} className="flex w-full items-center gap-4 rounded-3xl border border-slate-200 bg-white p-4 text-left transition hover:scale-[1.01] dark:border-white/10 dark:bg-white/5"><span className="grid h-10 w-10 place-items-center rounded-2xl bg-slate-950 font-black text-white dark:bg-white dark:text-slate-950">{index + 1}</span><span className="min-w-0 flex-1"><strong>{asset.ticker}</strong><span className="ml-2 text-sm text-slate-500 dark:text-slate-300">{asset.name}</span><p className="mt-1 text-xs text-slate-400">{analysis.kindLabel} · {asset.segment}</p><p className="mt-2 text-xs font-semibold text-cyan-700 dark:text-cyan-300">Score AlfaTec FIIs: {analysis.score === null ? "dados insuficientes" : `${analysis.score}/100`} · Renda {analysis.scores.renda === null ? "indisponível" : Math.round(analysis.scores.renda)} · Valuation {analysis.scores.valuation === null ? "indisponível" : Math.round(analysis.scores.valuation)}</p><p className="mt-1 text-xs text-slate-500 dark:text-slate-300">Confiança: {analysis.confidence === "Media" ? "Média" : analysis.confidence}. O método entra como componente identificado do Radar IA para FIIs.</p></span><span className="rounded-full bg-cyan-500/10 px-3 py-1 font-black text-cyan-600 dark:text-cyan-300">{analysis.score ?? "--"}</span></button>)}{items.length === 0 && <p className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-500 dark:bg-white/5 dark:text-slate-400">Nenhum FII atende aos filtros do Radar IA.</p>}</div>;
+}
+
 function ClientPlanSection({ user, plans, payments }: { user: Account; plans: Plan[]; payments: Payment[] }) {
   const plan = plans.find((item) => item.id === user.planId);
   const lastPayment = [...payments].filter((payment) => payment.clientId === user.id).sort((a, b) => b.paymentDate.localeCompare(a.paymentDate))[0];
@@ -1757,7 +1943,7 @@ function RankingRow({ asset, index, onClick }: { asset: Asset; index: number; on
       <span className="grid h-10 w-10 place-items-center rounded-2xl bg-slate-950 font-black text-white dark:bg-white dark:text-slate-950">{index}</span>
       <span className="min-w-0 flex-1">
         <strong>{asset.ticker}</strong><span className="ml-2 text-sm text-slate-500 dark:text-slate-300">{asset.name}</span>
-        <p className="mt-1 text-xs text-slate-400">{typeLabels[asset.type]} ? {asset.segment}</p>
+        <p className="mt-1 text-xs text-slate-400">{typeLabels[asset.type]} · {asset.segment}</p>
         <p className="mt-2 text-xs font-semibold text-cyan-700 dark:text-cyan-300">Dividendos: {dividendFrequency(asset)} ? {dividend === undefined ? "sem valor recorrente" : `${money.format(dividend)} por ação/cota`}</p>
         <p className="mt-1 text-xs font-semibold text-slate-600 dark:text-slate-300">Graham: {graham.value === undefined ? "não aplicável" : `${money.format(graham.value)} - margem ${pct(graham.safetyMargin)}`} - contribuição {grahamContribution}/10</p>
       </span>
