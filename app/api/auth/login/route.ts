@@ -1,0 +1,11 @@
+import { NextResponse } from "next/server";
+import { z } from "zod";
+import { attachSessionCookie, createSession } from "@/lib/auth/session";
+import { findAccount, publicAccount, readCoreState, writeCoreState } from "@/lib/server/core-state";
+import { hashPassword, needsPasswordUpgrade, verifyPassword } from "@/lib/auth/password";
+import { assertSameOrigin } from "@/lib/server/request-security";
+export const runtime = "nodejs";
+const schema=z.object({identifier:z.string().trim().min(1).max(254),password:z.string().min(1).max(256)}).strict();
+const attempts=new Map<string,{count:number;resetAt:number}>();
+function limited(key:string){const now=Date.now();const item=attempts.get(key);if(!item||item.resetAt<=now){attempts.set(key,{count:1,resetAt:now+15*60_000});return false;}item.count+=1;return item.count>5;}
+export async function POST(request:Request){try{assertSameOrigin(request);const input=schema.safeParse(await request.json().catch(()=>null));if(!input.success)return NextResponse.json({error:"Usuario ou senha invalidos."},{status:400});const ip=request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()||"unknown";const key=`${ip}:${input.data.identifier.toLowerCase()}`;if(limited(key))return NextResponse.json({error:"Muitas tentativas. Aguarde 15 minutos.",retryAfter:900},{status:429,headers:{"Retry-After":"900"}});const account=await findAccount(input.data.identifier).catch(()=>null);if(!account||!await verifyPassword(input.data.password,account.passwordHash))return NextResponse.json({error:"Usuario ou senha invalidos."},{status:401});if(account.status==="pendente")return NextResponse.json({error:"Conta criada e aguardando liberacao do administrador."},{status:403});if(needsPasswordUpgrade(account.passwordHash)){const state=await readCoreState();const index=state.accounts.findIndex(item=>item.id===account.id);if(index>=0){state.accounts[index]={...state.accounts[index],passwordHash:await hashPassword(input.data.password)};await writeCoreState(state);}}attempts.delete(key);const session=await createSession(account.id,request);return attachSessionCookie(NextResponse.json({user:publicAccount(account)}),session.token,session.expiresAt);}catch{return NextResponse.json({error:"Nao foi possivel validar o acesso."},{status:500});}}

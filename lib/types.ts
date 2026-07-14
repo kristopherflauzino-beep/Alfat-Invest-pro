@@ -45,6 +45,24 @@ export type AssetMetrics = {
   atl?: number;
   volatility?: number;
   drawdown?: number;
+  volume24h?: number;
+  totalSupply?: number;
+  fullyDilutedValuation?: number;
+  marketCapRank?: number;
+  genesisDate?: string;
+  blockTimeMinutes?: number;
+  hashingAlgorithm?: string;
+  activeAddresses?: number;
+  transactions24h?: number;
+  tvl?: number;
+  protocolRevenue?: number;
+  mvrv?: number;
+  nvt?: number;
+  annualInflation?: number;
+  holderConcentration?: number;
+  validators?: number;
+  developerCommits4Weeks?: number;
+  developerContributors?: number;
 };
 
 export type Asset = {

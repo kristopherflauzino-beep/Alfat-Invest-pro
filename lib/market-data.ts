@@ -174,7 +174,18 @@ const seeds: Seed[] = [
   { ticker: "BTC", name: "Bitcoin", type: "CRIPTO", sector: "Criptomoedas", segment: "Reserva digital", price: 350000, trend: 0.0025, volatility: 0.035, liquidity: 2500000000, metrics: { marketCap: 6800000000000, dominance: 52, circulatingSupply: 19600000, maxSupply: 21000000, hashRate: "650 EH/s", ath: 420000, atl: 0.05, volatility: 56, drawdown: 48, cagr: 38 }, currency: "BRL", tags: ["cripto", "reserva"] },
   { ticker: "ETH", name: "Ethereum", type: "CRIPTO", sector: "Criptomoedas", segment: "Smart contracts", price: 18500, trend: 0.0021, volatility: 0.039, liquidity: 1100000000, metrics: { marketCap: 2200000000000, dominance: 18, circulatingSupply: 120000000, maxSupply: undefined, ath: 28000, atl: 2.5, volatility: 62, drawdown: 55, cagr: 33 }, currency: "BRL", tags: ["cripto", "smart contracts"] },
   { ticker: "SOL", name: "Solana", type: "CRIPTO", sector: "Criptomoedas", segment: "Smart contracts", price: 780, trend: 0.0028, volatility: 0.049, liquidity: 420000000, metrics: { marketCap: 360000000000, dominance: 3.1, circulatingSupply: 465000000, ath: 1500, atl: 2.1, volatility: 72, drawdown: 64, cagr: 41 }, currency: "BRL", tags: ["cripto", "alta volatilidade"] },
-  { ticker: "BNB", name: "BNB", type: "CRIPTO", sector: "Criptomoedas", segment: "Exchange token", price: 3300, trend: 0.0018, volatility: 0.033, liquidity: 320000000, metrics: { marketCap: 490000000000, dominance: 3.7, circulatingSupply: 149000000, maxSupply: 200000000, ath: 4100, atl: 0.6, volatility: 51, drawdown: 46, cagr: 25 }, currency: "BRL", tags: ["cripto"] }
+  { ticker: "BNB", name: "BNB", type: "CRIPTO", sector: "Criptomoedas", segment: "Exchange token", price: 3300, trend: 0.0018, volatility: 0.033, liquidity: 320000000, metrics: { marketCap: 490000000000, dominance: 3.7, circulatingSupply: 149000000, maxSupply: 200000000, ath: 4100, atl: 0.6, volatility: 51, drawdown: 46, cagr: 25 }, currency: "BRL", tags: ["cripto"] },
+  { ticker: "XRP", name: "XRP", type: "CRIPTO", sector: "Criptomoedas", segment: "Pagamentos", price: 3, trend: 0.001, volatility: 0.04, liquidity: 1, metrics: {}, currency: "BRL", tags: ["pagamentos"] },
+  { ticker: "ADA", name: "Cardano", type: "CRIPTO", sector: "Criptomoedas", segment: "Layer 1", price: 2, trend: 0.001, volatility: 0.04, liquidity: 1, metrics: {}, currency: "BRL", tags: ["layer 1"] },
+  { ticker: "AVAX", name: "Avalanche", type: "CRIPTO", sector: "Criptomoedas", segment: "Layer 1", price: 100, trend: 0.001, volatility: 0.04, liquidity: 1, metrics: {}, currency: "BRL", tags: ["layer 1"] },
+  { ticker: "LINK", name: "Chainlink", type: "CRIPTO", sector: "Criptomoedas", segment: "Oraculos", price: 80, trend: 0.001, volatility: 0.04, liquidity: 1, metrics: {}, currency: "BRL", tags: ["oraculo", "infraestrutura"] },
+  { ticker: "POL", name: "Polygon Ecosystem Token", type: "CRIPTO", sector: "Criptomoedas", segment: "Layer 2", price: 2, trend: 0.001, volatility: 0.04, liquidity: 1, metrics: {}, currency: "BRL", tags: ["layer 2"] },
+  { ticker: "UNI", name: "Uniswap", type: "CRIPTO", sector: "Criptomoedas", segment: "DeFi", price: 40, trend: 0.001, volatility: 0.04, liquidity: 1, metrics: {}, currency: "BRL", tags: ["defi"] },
+  { ticker: "AAVE", name: "Aave", type: "CRIPTO", sector: "Criptomoedas", segment: "DeFi", price: 900, trend: 0.001, volatility: 0.04, liquidity: 1, metrics: {}, currency: "BRL", tags: ["defi", "credito"] },
+  { ticker: "USDC", name: "USDC", type: "CRIPTO", sector: "Criptomoedas", segment: "Stablecoin", price: 5, trend: 0, volatility: 0.005, liquidity: 1, metrics: {}, currency: "BRL", tags: ["stablecoin"] },
+  { ticker: "USDT", name: "Tether", type: "CRIPTO", sector: "Criptomoedas", segment: "Stablecoin", price: 5, trend: 0, volatility: 0.005, liquidity: 1, metrics: {}, currency: "BRL", tags: ["stablecoin"] },
+  { ticker: "DOGE", name: "Dogecoin", type: "CRIPTO", sector: "Criptomoedas", segment: "Memecoin", price: 1, trend: 0.001, volatility: 0.06, liquidity: 1, metrics: {}, currency: "BRL", tags: ["memecoin"] },
+  { ticker: "SHIB", name: "Shiba Inu", type: "CRIPTO", sector: "Criptomoedas", segment: "Memecoin", price: 0.0001, trend: 0.001, volatility: 0.07, liquidity: 1, metrics: {}, currency: "BRL", tags: ["memecoin"] },
 ];
 
 function buildAsset(seed: Seed): Asset {
@@ -300,7 +311,19 @@ const knownAssetAliases: Record<string, string[]> = {
   CPTS11: ["capitania", "capitania securities", "cpts", "cpts11:bvmf"],
   BTC: ["bitcoin", "btcbrl"],
   ETH: ["ethereum", "ether", "ethbrl"],
-  SOL: ["solana", "solbrl"]
+  SOL: ["solana", "solbrl"],
+  BNB: ["binance coin", "bnb"],
+  XRP: ["ripple", "xrp"],
+  ADA: ["cardano", "ada"],
+  AVAX: ["avalanche", "avax"],
+  LINK: ["chainlink", "oracle"],
+  POL: ["polygon", "matic"],
+  UNI: ["uniswap", "uni"],
+  AAVE: ["aave", "defi lending"],
+  USDC: ["usd coin", "stablecoin"],
+  USDT: ["tether", "stablecoin"],
+  DOGE: ["dogecoin", "doge"],
+  SHIB: ["shiba inu", "shib"]
 };
 
 function normalizeSearchText(value: string) {

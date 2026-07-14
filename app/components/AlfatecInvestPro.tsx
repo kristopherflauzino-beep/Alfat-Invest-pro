@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   BarChart3,
   Bell,
+  Bitcoin,
   BrainCircuit,
   BriefcaseBusiness,
   Building2,
@@ -107,11 +108,25 @@ import { FiiDataSourceInfo } from "@/components/fii/FiiDataSourceInfo";
 import { FiiOpportunityFilters, type FiiOpportunityFilterState } from "@/components/fii/FiiOpportunityFilters";
 import { FiiScoreBreakdown } from "@/components/fii/FiiScoreBreakdown";
 import { FiiSegmentComparison } from "@/components/fii/FiiSegmentComparison";
+import {
+  analyzeAlfatecCrypto,
+  cryptoCategoryLabels,
+  defaultCryptoSettings,
+  normalizeCryptoSettings,
+  type AlfatecCryptoAnalysis,
+  type CryptoMarketSnapshot,
+  type CryptoSettings
+} from "@/lib/analysis/alfatec-crypto";
+import { AlfatecCryptoSection } from "@/components/crypto/AlfatecCryptoSection";
+import { CryptoComparison, CryptoMiniSummary, CryptoOpportunityTable, filterCryptoAnalyses } from "@/components/crypto/CryptoAnalysisTables";
+import { CryptoOpportunityFilters, defaultCryptoOpportunityFilters, type CryptoOpportunityFilterState } from "@/components/crypto/CryptoOpportunityFilters";
+import { ClientPaymentCheckout } from "@/components/payments/ClientPaymentCheckout";
+import { AdminPaymentsPanel } from "@/components/payments/AdminPaymentsPanel";
 
 type Role = "ADMIN" | "CLIENTE";
 type ClientStatus = "ativo" | "pendente" | "bloqueado" | "vencido";
 type PaymentStatus = "pago" | "pendente" | "vencido" | "cancelado";
-type ClientModuleId = "dashboard" | "mercado" | "oportunidades" | "comparador" | "carteira" | "radar" | "relatorios" | "graham_valuation" | "alfatec_fiis" | "plano" | "configuracoes";
+type ClientModuleId = "dashboard" | "mercado" | "oportunidades" | "comparador" | "carteira" | "radar" | "relatorios" | "graham_valuation" | "alfatec_fiis" | "alfatec_crypto_method" | "plano" | "configuracoes";
 type AdminModuleId = "admin-dashboard" | "clientes" | "planos" | "financeiro" | "admin-relatorios" | "configuracoes";
 type RangeId = "1D" | "5D" | "1M" | "6M" | "1A" | "5A" | "MAX";
 
@@ -198,6 +213,8 @@ type PlanPriceHistory = {
 
 type AuditLog = { id: string; action: string; userId: string; userName: string; details: string; createdAt: string; risk: "baixo" | "medio" | "alto" };
 
+type PaymentSettings = { provider: "mercado_pago"; pixDiscountPercent: number; pixExpirationMinutes: number; cardInstallments: number; annualInstallmentsEnabled: boolean; gracePeriodDays: number; renewalMode: "today" | "extend"; testMode: boolean };
+
 type AppStatePayload = {
   accounts: Account[];
   plans: Plan[];
@@ -206,11 +223,12 @@ type AppStatePayload = {
   planPriceHistory: PlanPriceHistory[];
   grahamSettings: GrahamSettings;
   fiiSettings: AlfatecFiiSettings;
+  cryptoSettings: CryptoSettings;
+  paymentSettings: PaymentSettings;
   auditLogs: AuditLog[];
 };
 
-const ADMIN_DEFAULT_HASH = "cc5c75de95387000d28fce6a21f4d8c4ff8560b1b37e73d39eb63c3029697db5";
-const allClientModules: ClientModuleId[] = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "radar", "relatorios", "graham_valuation", "alfatec_fiis", "plano", "configuracoes"];
+const allClientModules: ClientModuleId[] = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "radar", "relatorios", "graham_valuation", "alfatec_fiis", "alfatec_crypto_method", "plano", "configuracoes"];
 const clientModules: Array<{ id: ClientModuleId; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: "dashboard", label: "Dashboard", icon: Gauge },
   { id: "mercado", label: "Mercado", icon: BarChart3 },
@@ -221,6 +239,7 @@ const clientModules: Array<{ id: ClientModuleId; label: string; icon: React.Comp
   { id: "relatorios", label: "Relatórios", icon: FileSpreadsheet },
   { id: "graham_valuation", label: "Valuation Graham", icon: Calculator },
   { id: "alfatec_fiis", label: "Método AlfaTec FIIs", icon: Building2 },
+  { id: "alfatec_crypto_method", label: "Metodo AlfaTec Cripto", icon: Bitcoin },
   { id: "plano", label: "Plano", icon: WalletCards },
   { id: "configuracoes", label: "Configurações", icon: Settings }
 ];
@@ -248,6 +267,8 @@ const defaultPlans: Plan[] = [
   { id: "mensal", name: "Mensal", value: suggestedPlanValues.mensal, durationDays: 30, status: "ativo", permissions: allClientModules },
   { id: "anual", name: "Anual", value: suggestedPlanValues.anual, durationDays: 365, status: "ativo", permissions: allClientModules }
 ];
+const defaultPaymentSettings: PaymentSettings = { provider: "mercado_pago", pixDiscountPercent: 0, pixExpirationMinutes: 30, cardInstallments: 12, annualInstallmentsEnabled: true, gracePeriodDays: 3, renewalMode: "extend", testMode: true };
+
 const starterPortfolio: PortfolioPosition[] = [
   { id: "p1", ticker: "GARE11", quantity: 120, averagePrice: 9.35, broker: "Rico", purchaseDate: "2026-02-10" },
   { id: "p2", ticker: "BBAS3", quantity: 80, averagePrice: 25.9, broker: "XP", purchaseDate: "2025-09-18" },
@@ -332,30 +353,13 @@ function isExpired(dueDate?: string) {
   return Boolean(dueDate && dueDate < todayIso());
 }
 
-function baseAdminAccount(): Account {
-  return {
-    id: "admin-flauzino",
-    role: "ADMIN",
-    username: "Flauzino",
-    email: "admin@alfatec.local",
-    name: "Flauzino",
-    passwordHash: ADMIN_DEFAULT_HASH,
-    status: "ativo",
-    createdAt: todayIso(),
-    permissions: allClientModules
-  };
-}
-
 function safeParse<T>(value: string | null, fallback: T): T {
   if (!value) return fallback;
   try { return JSON.parse(value) as T; } catch { return fallback; }
 }
 
 function normalizeAccounts(accounts: Account[]) {
-  const admin = baseAdminAccount();
-  const normalized = accounts.length ? accounts : [admin];
-  const withAdmin = normalized.some((account) => account.id === admin.id) ? normalized : [admin, ...normalized];
-  return withAdmin.map((account) => {
+  return accounts.map((account) => {
     if (account.role === "ADMIN") return { ...account, permissions: allClientModules };
     const permissions = account.permissions?.length >= 7 ? allClientModules : account.permissions ?? [];
     const status = account.role === "CLIENTE" && isExpired(account.dueDate) && account.status === "ativo" ? "vencido" : account.status;
@@ -378,6 +382,10 @@ function normalizeGrahamSettings(settings?: Partial<GrahamSettings>): GrahamSett
 
 function normalizeFiiSettings(settings?: Partial<AlfatecFiiSettings>): AlfatecFiiSettings {
   return normalizeAlfatecFiiSettings(settings);
+}
+
+function normalizePaymentSettings(settings?: Partial<PaymentSettings>): PaymentSettings {
+  return { ...defaultPaymentSettings, ...(settings ?? {}) };
 }
 
 function mergeById<T extends { id: string }>(server: T[], local: T[]) {
@@ -416,6 +424,8 @@ function mergeAppState(server: Partial<AppStatePayload>, local: AppStatePayload)
     planPriceHistory: mergeById(server.planPriceHistory ?? [], local.planPriceHistory),
     grahamSettings: normalizeGrahamSettings(server.grahamSettings ?? local.grahamSettings),
     fiiSettings: normalizeFiiSettings(server.fiiSettings ?? local.fiiSettings),
+    cryptoSettings: normalizeCryptoSettings(server.cryptoSettings ?? local.cryptoSettings),
+    paymentSettings: normalizePaymentSettings(server.paymentSettings ?? local.paymentSettings),
     auditLogs: mergeById(server.auditLogs ?? [], local.auditLogs)
   };
 }
@@ -428,6 +438,8 @@ function statesDiffer(a: AppStatePayload, b: Partial<AppStatePayload>) {
     JSON.stringify(a.planPriceHistory) !== JSON.stringify(b.planPriceHistory ?? []) ||
     JSON.stringify(a.grahamSettings) !== JSON.stringify(b.grahamSettings ?? defaultGrahamSettings) ||
     JSON.stringify(a.fiiSettings) !== JSON.stringify(b.fiiSettings ?? defaultAlfatecFiiSettings) ||
+    JSON.stringify(a.cryptoSettings) !== JSON.stringify(b.cryptoSettings ?? defaultCryptoSettings) ||
+    JSON.stringify(a.paymentSettings) !== JSON.stringify(b.paymentSettings ?? defaultPaymentSettings) ||
     JSON.stringify(a.auditLogs) !== JSON.stringify(b.auditLogs ?? []);
 }
 
@@ -608,11 +620,7 @@ function quoteToAsset(quote: ExternalQuote, previousAsset?: Asset): Asset {
   asset.score = calculateAssetScore(asset);
   return asset;
 }
-async function sha256(value: string) {
-  const data = new TextEncoder().encode(value);
-  const digest = await crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
+
 function passwordChecks(value: string) {
   return [
     { id: "length", label: "Mínimo 12 caracteres", valid: value.length >= 12 },
@@ -645,6 +653,14 @@ export default function AlfatecInvestPro() {
   const [planPriceHistory, setPlanPriceHistory] = useState<PlanPriceHistory[]>([]);
   const [grahamSettings, setGrahamSettings] = useState<GrahamSettings>(defaultGrahamSettings);
   const [fiiSettings, setFiiSettings] = useState<AlfatecFiiSettings>(defaultAlfatecFiiSettings);
+  const [cryptoSettings, setCryptoSettings] = useState<CryptoSettings>(defaultCryptoSettings);
+  const [paymentSettings, setPaymentSettings] = useState<PaymentSettings>(defaultPaymentSettings);
+  const [cryptoSnapshots, setCryptoSnapshots] = useState<Record<string, CryptoMarketSnapshot>>({});
+  const [cryptoTicker, setCryptoTicker] = useState("BTC");
+  const [cryptoLoading, setCryptoLoading] = useState(false);
+  const [cryptoError, setCryptoError] = useState("");
+  const [cryptoFilters, setCryptoFilters] = useState<CryptoOpportunityFilterState>(defaultCryptoOpportunityFilters);
+  const [radarCryptoFilters, setRadarCryptoFilters] = useState<CryptoOpportunityFilterState>({ ...defaultCryptoOpportunityFilters, minScore: 60, maxRisk: 75 });
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [loginUser, setLoginUser] = useState("");
@@ -702,13 +718,18 @@ export default function AlfatecInvestPro() {
   const portfolioDividendCycle = useMemo(() => portfolioAnalysis.lines.reduce((sum, line) => sum + (dividendPerShare(line.asset) ?? 0) * line.quantity, 0), [portfolioAnalysis.lines]);
   const marketResults = useMemo(() => searchAssets(marketSearch, marketType, assets, { includeDynamic: false }), [marketSearch, marketType, assets]);
   const rankedAssets = useMemo(() => [...assets].map((asset) => assetWithScore(asset, weights, grahamSettings, fiiSettings)).sort((a, b) => b.score - a.score), [assets, weights, grahamSettings, fiiSettings]);
-  const opportunityResults = useMemo(() => marketResults.filter((asset) => asset.type !== "FII").map((asset) => assetWithScore(asset, weights, grahamSettings, fiiSettings)).filter((asset) => passesGrahamOpportunityFilters(asset, { onlyBelow: opGrahamOnly, minMargin: opMinMargin, onlyPositiveLpa: opPositiveLpa, onlyPositiveVpa: opPositiveVpa })).sort((a, b) => (analisarNumeroGraham(b).safetyMargin ?? -Infinity) - (analisarNumeroGraham(a).safetyMargin ?? -Infinity)), [marketResults, weights, grahamSettings, fiiSettings, opGrahamOnly, opMinMargin, opPositiveLpa, opPositiveVpa]);
-  const rankedOpportunityAssets = useMemo(() => rankedAssets.filter((asset) => asset.type !== "FII" && passesGrahamOpportunityFilters(asset, { onlyBelow: opGrahamOnly, minMargin: opMinMargin, onlyPositiveLpa: opPositiveLpa, onlyPositiveVpa: opPositiveVpa })), [rankedAssets, opGrahamOnly, opMinMargin, opPositiveLpa, opPositiveVpa]);
-  const radarAssets = useMemo(() => rankedAssets.filter((asset) => asset.type !== "FII" && passesRadarFilters(asset, { grahamOnly: radarGrahamOnly, minMargin: radarMinMargin, minPotential: radarMinPotential, maxPl: radarMaxPl, maxPvp: radarMaxPvp, minLiquidity: radarMinLiquidity, minRoe: radarMinRoe, maxDebt: radarMaxDebt })), [rankedAssets, radarGrahamOnly, radarMinMargin, radarMinPotential, radarMaxPl, radarMaxPvp, radarMinLiquidity, radarMinRoe, radarMaxDebt]);
+  const opportunityResults = useMemo(() => marketResults.filter((asset) => asset.type !== "FII" && asset.type !== "CRIPTO").map((asset) => assetWithScore(asset, weights, grahamSettings, fiiSettings)).filter((asset) => passesGrahamOpportunityFilters(asset, { onlyBelow: opGrahamOnly, minMargin: opMinMargin, onlyPositiveLpa: opPositiveLpa, onlyPositiveVpa: opPositiveVpa })).sort((a, b) => (analisarNumeroGraham(b).safetyMargin ?? -Infinity) - (analisarNumeroGraham(a).safetyMargin ?? -Infinity)), [marketResults, weights, grahamSettings, fiiSettings, opGrahamOnly, opMinMargin, opPositiveLpa, opPositiveVpa]);
+  const rankedOpportunityAssets = useMemo(() => rankedAssets.filter((asset) => asset.type !== "FII" && asset.type !== "CRIPTO" && passesGrahamOpportunityFilters(asset, { onlyBelow: opGrahamOnly, minMargin: opMinMargin, onlyPositiveLpa: opPositiveLpa, onlyPositiveVpa: opPositiveVpa })), [rankedAssets, opGrahamOnly, opMinMargin, opPositiveLpa, opPositiveVpa]);
+  const radarAssets = useMemo(() => rankedAssets.filter((asset) => asset.type !== "FII" && asset.type !== "CRIPTO" && passesRadarFilters(asset, { grahamOnly: radarGrahamOnly, minMargin: radarMinMargin, minPotential: radarMinPotential, maxPl: radarMaxPl, maxPvp: radarMaxPvp, minLiquidity: radarMinLiquidity, minRoe: radarMinRoe, maxDebt: radarMaxDebt })), [rankedAssets, radarGrahamOnly, radarMinMargin, radarMinPotential, radarMaxPl, radarMaxPvp, radarMinLiquidity, radarMinRoe, radarMaxDebt]);
   const fiiAnalyses = useMemo(() => assets.filter((asset) => asset.type === "FII").map((asset) => ({ asset, analysis: analisarAlfatecFii(asset, fiiSettings) })), [assets, fiiSettings]);
   const fiiSegments = useMemo(() => Array.from(new Set(fiiAnalyses.map((item) => item.asset.segment))).sort(), [fiiAnalyses]);
   const fiiOpportunityAnalyses = useMemo(() => fiiAnalyses.filter((item) => passesFiiFilters(item.analysis, fiiFilters)).sort((a, b) => (b.analysis.score ?? -Infinity) - (a.analysis.score ?? -Infinity)), [fiiAnalyses, fiiFilters]);
   const radarFiiAnalyses = useMemo(() => fiiAnalyses.filter((item) => passesFiiFilters(item.analysis, radarFiiFilters)).sort((a, b) => (b.analysis.score ?? -Infinity) - (a.analysis.score ?? -Infinity)), [fiiAnalyses, radarFiiFilters]);
+  const cryptoAnalyses = useMemo(() => Object.values(cryptoSnapshots).map((snapshot) => analyzeAlfatecCrypto(snapshot, cryptoSettings)), [cryptoSnapshots, cryptoSettings]);
+  const selectedCryptoAnalysis = useMemo(() => cryptoAnalyses.find((item) => item.ticker === cryptoTicker) ?? null, [cryptoAnalyses, cryptoTicker]);
+  const cryptoOpportunityAnalyses = useMemo(() => filterCryptoAnalyses(cryptoAnalyses, cryptoFilters), [cryptoAnalyses, cryptoFilters]);
+  const radarCryptoAnalyses = useMemo(() => filterCryptoAnalyses(cryptoAnalyses, radarCryptoFilters), [cryptoAnalyses, radarCryptoFilters]);
+  const cryptoFilterCategories = useMemo(() => Array.from(new Map(cryptoAnalyses.map((item) => [item.category, { value: item.category, label: cryptoCategoryLabels[item.category] }])).values()), [cryptoAnalyses]);
   const currentUser = useMemo(() => accounts.find((account) => account.id === sessionId) ?? null, [accounts, sessionId]);
   const clients = useMemo(() => accounts.filter((account) => account.role === "CLIENTE"), [accounts]);
   const financial = useMemo(() => buildFinancialSummary(clients, plans, payments), [clients, plans, payments]);
@@ -726,18 +747,20 @@ export default function AlfatecInvestPro() {
   ], []);
 
   function currentSnapshot(): AppStatePayload {
-    return { accounts, plans, payments, portfolio, planPriceHistory, grahamSettings, fiiSettings, auditLogs };
+    return { accounts, plans, payments, portfolio, planPriceHistory, grahamSettings, fiiSettings, cryptoSettings, paymentSettings, auditLogs };
   }
 
   function localSnapshot(): AppStatePayload {
     return {
-      accounts: normalizeAccounts(safeParse<Account[]>(window.localStorage.getItem("alfatec-users"), [])),
-      plans: normalizePlans(safeParse<Plan[]>(window.localStorage.getItem("alfatec-plans"), defaultPlans)),
-      payments: safeParse<Payment[]>(window.localStorage.getItem("alfatec-payments"), []),
-      portfolio: safeParse<PortfolioPosition[]>(window.localStorage.getItem("alfatec-portfolio"), starterPortfolio),
-      planPriceHistory: safeParse<PlanPriceHistory[]>(window.localStorage.getItem("alfatec-plan-price-history"), []),
+      accounts: [],
+      plans: normalizePlans(defaultPlans),
+      payments: [],
+      portfolio: starterPortfolio,
+      planPriceHistory: [],
       grahamSettings: normalizeGrahamSettings(safeParse<Partial<GrahamSettings>>(window.localStorage.getItem("alfatec-graham-settings"), defaultGrahamSettings)),
       fiiSettings: normalizeFiiSettings(safeParse<Partial<AlfatecFiiSettings>>(window.localStorage.getItem("alfatec-fii-settings"), defaultAlfatecFiiSettings)),
+      cryptoSettings: normalizeCryptoSettings(safeParse<Partial<CryptoSettings>>(window.localStorage.getItem("alfatec-crypto-settings"), defaultCryptoSettings)),
+      paymentSettings: normalizePaymentSettings(safeParse<Partial<PaymentSettings>>(window.localStorage.getItem("alfatec-payment-settings"), defaultPaymentSettings)),
       auditLogs: safeParse<AuditLog[]>(window.localStorage.getItem("alfatec-audit-logs"), [])
     };
   }
@@ -770,24 +793,26 @@ export default function AlfatecInvestPro() {
     setPlanPriceHistory(merged.planPriceHistory);
     setGrahamSettings(merged.grahamSettings);
     setFiiSettings(merged.fiiSettings);
+    setCryptoSettings(merged.cryptoSettings);
+    setPaymentSettings(merged.paymentSettings);
     setAuditLogs(merged.auditLogs);
     setStateLoaded(true);
     setDatabaseError("");
-    if (statesDiffer(merged, serverState)) void persistAppState(merged).catch((error) => setDatabaseError(error instanceof Error ? error.message : "Erro ao salvar no banco."));
     return merged;
   }
 
   useEffect(() => {
-    const savedSession = window.localStorage.getItem("alfatec-session");
     const savedTheme = window.localStorage.getItem("alfatec-theme");
-    if (savedSession) setSessionId(savedSession);
     if (savedTheme) setDarkMode(savedTheme === "dark");
 
     let cancelled = false;
     async function loadState() {
       try {
+        const sessionResponse = await fetch("/api/auth/session", { cache: "no-store" });
+        const sessionData = await sessionResponse.json().catch(() => ({ user: null }));
         const merged = await loadAppState(localSnapshot());
         if (cancelled) return;
+        if (sessionResponse.ok && sessionData.user?.id) setSessionId(sessionData.user.id);
         setAccounts(merged.accounts);
         setPlans(merged.plans);
         setPayments(merged.payments);
@@ -795,20 +820,24 @@ export default function AlfatecInvestPro() {
         setPlanPriceHistory(merged.planPriceHistory);
         setGrahamSettings(merged.grahamSettings);
         setFiiSettings(merged.fiiSettings);
+        setCryptoSettings(merged.cryptoSettings);
+        setPaymentSettings(merged.paymentSettings);
         setAuditLogs(merged.auditLogs);
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Banco de dados indisponível.";
-        console.error("Banco de dados indisponível", error);
+        const message = error instanceof Error ? error.message : "Banco de dados indisponivel.";
+        console.error("Banco de dados indisponivel", error);
         if (cancelled) return;
         const localState = localSnapshot();
-        setAccounts(localState.accounts);
+        setAccounts([]);
         setPlans(localState.plans);
-        setPayments(localState.payments);
-        setPortfolio(localState.portfolio.length ? localState.portfolio : starterPortfolio);
-        setPlanPriceHistory(localState.planPriceHistory);
+        setPayments([]);
+        setPortfolio(starterPortfolio);
+        setPlanPriceHistory([]);
         setGrahamSettings(localState.grahamSettings);
         setFiiSettings(localState.fiiSettings);
-        setAuditLogs(localState.auditLogs);
+        setCryptoSettings(localState.cryptoSettings);
+        setPaymentSettings(localState.paymentSettings);
+        setAuditLogs([]);
         setDatabaseError(message);
         setStateLoaded(true);
       }
@@ -819,18 +848,21 @@ export default function AlfatecInvestPro() {
   }, []);
 
   useEffect(() => {
-    if (!stateLoaded) return;
-    const snapshot: AppStatePayload = { accounts, plans, payments, portfolio, planPriceHistory, grahamSettings, fiiSettings, auditLogs };
+    if (!stateLoaded || !sessionId) return;
+    const snapshot: AppStatePayload = { accounts, plans, payments, portfolio, planPriceHistory, grahamSettings, fiiSettings, cryptoSettings, paymentSettings, auditLogs };
     const timeout = window.setTimeout(() => {
       void persistAppState(snapshot).catch((error) => setDatabaseError(error instanceof Error ? error.message : "Erro ao salvar no banco."));
     }, 500);
     return () => window.clearTimeout(timeout);
-  }, [stateLoaded, accounts, plans, payments, portfolio, planPriceHistory, grahamSettings, fiiSettings, auditLogs]);
+  }, [stateLoaded, accounts, plans, payments, portfolio, planPriceHistory, grahamSettings, fiiSettings, cryptoSettings, paymentSettings, auditLogs]);
 
   useEffect(() => window.localStorage.setItem("alfatec-theme", darkMode ? "dark" : "light"), [darkMode]);
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get("menu") as ClientModuleId | null;
+    if (requested && allClientModules.includes(requested)) { setClientModule(requested); if (currentUser?.role === "ADMIN") setAdminModule(requested); }
+  }, [currentUser?.role]);
   useEffect(() => setGrahamY(grahamSettings.defaultY), [grahamSettings.defaultY]);
   useEffect(() => { extraAssets.filter((asset) => asset.source === "external").forEach((asset) => window.localStorage.setItem("alfatec-quote-" + asset.ticker, JSON.stringify(asset))); }, [extraAssets]);
-  useEffect(() => { if (sessionId) window.localStorage.setItem("alfatec-session", sessionId); else window.localStorage.removeItem("alfatec-session"); }, [sessionId]);
   async function refreshTicker(tickerInput: string, options: { select?: boolean; silent?: boolean } = {}) {
     const clean = normalizeTicker(tickerInput);
     if (!isTickerLike(clean)) return null;
@@ -876,90 +908,67 @@ export default function AlfatecInvestPro() {
     return () => window.clearInterval(interval);
   }, [settings.autoUpdate, portfolio.length, selectedAsset.ticker]);
 
+  useEffect(() => {
+    if (!stateLoaded) return;
+    void loadCryptoData(["BTC", "ETH", "SOL", "BNB", "LINK", "AAVE", "USDC", "DOGE"]);
+  }, [stateLoaded]);
+
   async function handleLogin(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setLoginError("");
-    const cleanUser = loginUser.trim().toLowerCase();
-    if (!cleanUser || !loginPassword) {
-      setLoginError("Informe nome, usuário/e-mail e senha.");
+    if (!loginUser.trim() || !loginPassword) {
+      setLoginError("Informe nome, usuario/e-mail e senha.");
       return;
     }
-    let loginAccounts = accounts;
     try {
-      const latest = await loadAppState(currentSnapshot());
-      loginAccounts = latest.accounts;
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ identifier: loginUser.trim(), password: loginPassword })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.error ?? "Usuario ou senha invalidos.");
+      const merged = await loadAppState(localSnapshot());
+      setAccounts(merged.accounts);
+      setSessionId(data.user.id);
+      setClientModule("dashboard");
+      setAdminModule("admin-dashboard");
+      setDatabaseError("");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Banco de dados indisponível.";
-      setDatabaseError(message);
-      setLoginError(message + " Verifique a configuração do banco antes de acessar em outro equipamento.");
-      return;
+      setLoginError(error instanceof Error ? error.message : "Nao foi possivel entrar.");
     }
-    const hash = await sha256(loginPassword);
-    const found = loginAccounts.find((account) => {
-      const identifiers = [account.username, account.email, account.name].map((value) => value.toLowerCase());
-      return identifiers.includes(cleanUser) && account.passwordHash === hash;
-    });
-    if (!found) {
-      setLoginError("Login inválido. Use seu nome, usuário ou e-mail cadastrado.");
-      return;
-    }
-    if (found.role === "CLIENTE" && found.status === "pendente") {
-      setLoginError("Conta criada e aguardando liberação do administrador.");
-      return;
-    }
-    if (found.role === "CLIENTE" && (found.status === "bloqueado" || found.status === "vencido" || isExpired(found.dueDate))) {
-      setSessionId(found.id);
-      return;
-    }
-    setSessionId(found.id);
-    setClientModule("dashboard");
-    setAdminModule("admin-dashboard");
   }
 
   async function requestAccount(payload: { name: string; email: string; phone: string; password: string; planId: string }) {
     setRegisterMessage("");
     setLoginError("");
-    const name = payload.name.trim();
-    const email = payload.email.trim().toLowerCase();
-    const phone = payload.phone.trim();
-    const plan = plans.find((item) => item.id === payload.planId) ?? plans[1];
-    if (!name || !email) {
-      setRegisterMessage("Informe nome e e-mail.");
-      return;
-    }
     if (!isStrongPassword(payload.password)) {
       setRegisterMessage(passwordRequirementMessage());
       return;
     }
-    const exists = accounts.some((account) => account.email.toLowerCase() === email || account.username.toLowerCase() === email || account.name.toLowerCase() === name.toLowerCase());
-    if (exists) {
-      setRegisterMessage("Já existe uma conta com esse nome ou e-mail.");
-      return;
+    try {
+      const response = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.error ?? "Nao foi possivel criar a conta.");
+      setRegisterMessage(data.message ?? "Conta criada. Aguarde a liberacao do administrador.");
+    } catch (error) {
+      setRegisterMessage(error instanceof Error ? error.message : "Nao foi possivel criar a conta.");
     }
-    const client: Account = {
-      id: crypto.randomUUID(),
-      role: "CLIENTE",
-      username: email,
-      email,
-      name,
-      phone,
-      passwordHash: await sha256(payload.password),
-      planId: plan.id,
-      planValue: plan.value,
-      status: "pendente",
-      createdAt: todayIso(),
-      dueDate: addDays(plan.durationDays),
-      planStartedAt: todayIso(),
-      notes: "Cadastro solicitado pelo usuário. Aguardando liberação do admin.",
-      permissions: plan.permissions
-    };
-    setAccounts((current) => [client, ...current]);
-    setRegisterMessage("Conta criada. Aguarde a liberação do administrador para acessar.");
   }
 
   function logout() {
-    setSessionId(null);
-    setLoginPassword("");
+    void fetch("/api/auth/logout", { method: "POST" }).finally(() => {
+      setSessionId(null);
+      setAccounts([]);
+      setPayments([]);
+      setAuditLogs([]);
+      setLoginPassword("");
+      void loadAppState(localSnapshot()).catch(() => undefined);
+    });
   }
 
   function handleAdminMenu(id: string) {
@@ -1000,36 +1009,21 @@ export default function AlfatecInvestPro() {
 
   async function addClient(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const formData = new FormData(event.currentTarget);
-    const planId = String(formData.get("planId") ?? "mensal");
-    const plan = plans.find((item) => item.id === planId) ?? plans[1];
-    const password = String(formData.get("password") ?? "Invest@2026!");
-    if (!isStrongPassword(password)) {
-      alert(passwordRequirementMessage());
-      return;
-    }
-    const client: Account = {
-      id: crypto.randomUUID(),
-      role: "CLIENTE",
-      username: String(formData.get("email") ?? "").trim(),
-      email: String(formData.get("email") ?? "").trim(),
-      name: String(formData.get("name") ?? "").trim(),
-      phone: String(formData.get("phone") ?? "").trim(),
-      passwordHash: await sha256(password),
-      planId,
-      planValue: plan.value,
-      status: "ativo",
-      createdAt: todayIso(),
-      dueDate: String(formData.get("dueDate") ?? "") || addDays(plan.durationDays),
-      planStartedAt: todayIso(),
-      notes: String(formData.get("notes") ?? "").trim(),
-      permissions: plan.permissions
-    };
-    if (!client.name || !client.email) return;
-    setAccounts((current) => [client, ...current]);
-    setSelectedClientId(client.id);
-    setNewClientPassword("Invest@2026!");
-    event.currentTarget.reset();
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const password = String(formData.get("password") ?? "");
+    if (!isStrongPassword(password)) { alert(passwordRequirementMessage()); return; }
+    const payload = { name: String(formData.get("name") ?? "").trim(), email: String(formData.get("email") ?? "").trim(), phone: String(formData.get("phone") ?? "").trim(), password, planId: String(formData.get("planId") ?? "mensal"), dueDate: String(formData.get("dueDate") ?? "") || undefined, notes: String(formData.get("notes") ?? "").trim() };
+    try {
+      const response = await fetch("/api/admin/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error ?? "Nao foi possivel cadastrar o cliente.");
+      const merged = await loadAppState(currentSnapshot());
+      setAccounts(merged.accounts);
+      setSelectedClientId(data.user?.id ?? null);
+      setNewClientPassword("Invest@2026!");
+      form.reset();
+    } catch (error) { alert(error instanceof Error ? error.message : "Nao foi possivel cadastrar o cliente."); }
   }
 
   function updateClient(id: string, patch: Partial<Account>) {
@@ -1044,8 +1038,8 @@ export default function AlfatecInvestPro() {
 
 
   function logAudit(action: string, details: string, risk: AuditLog["risk"] = "baixo") {
-    const actor = currentUser ?? baseAdminAccount();
-    setAuditLogs((current) => [{ id: crypto.randomUUID(), action, userId: actor.id, userName: actor.name, details, createdAt: new Date().toISOString(), risk }, ...current].slice(0, 250));
+    if (!currentUser) return;
+    setAuditLogs((current) => [{ id: crypto.randomUUID(), action, userId: currentUser.id, userName: currentUser.name, details, createdAt: new Date().toISOString(), risk }, ...current].slice(0, 250));
   }
 
   function updateOfficialPlan(planId: string, patch: Partial<Plan>, notes = "") {
@@ -1072,6 +1066,33 @@ export default function AlfatecInvestPro() {
     setFiiSettings(next);
     logAudit("configuracao_alfatec_fiis", "Parâmetros do Método AlfaTec FIIs atualizados.", "medio");
   }
+
+  function saveCryptoSettings(next: CryptoSettings) {
+    const normalizedSettings = normalizeCryptoSettings({ ...next, updatedAt: new Date().toISOString(), updatedBy: currentUser?.name ?? "Admin" });
+    setCryptoSettings(normalizedSettings);
+    logAudit("configuracao_alfatec_cripto", "Parametros do Metodo AlfaTec Cripto atualizados.", "medio");
+  }
+
+  async function loadCryptoData(tickers: string[]) {
+    const clean = [...new Set(tickers.map((ticker) => normalizeTicker(ticker)).filter(Boolean))].slice(0, 8);
+    if (!clean.length) return;
+    setCryptoLoading(true);
+    setCryptoError("");
+    try {
+      const response = await fetch(`/api/crypto/analysis?tickers=${encodeURIComponent(clean.join(","))}`, { cache: "no-store" });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload?.error ?? "Fonte de criptoativos indisponivel.");
+      const snapshots = (payload.results ?? []).filter((item: { ok?: boolean }) => item.ok).map((item: { snapshot: CryptoMarketSnapshot }) => item.snapshot);
+      setCryptoSnapshots((current) => ({ ...current, ...Object.fromEntries(snapshots.map((snapshot: CryptoMarketSnapshot) => [snapshot.ticker, snapshot])) }));
+      const failed = (payload.results ?? []).filter((item: { ok?: boolean }) => !item.ok);
+      if (failed.length) setCryptoError(failed.map((item: { ticker: string; error: string }) => `${item.ticker}: ${item.error}`).join(" "));
+    } catch (error) {
+      setCryptoError(error instanceof Error ? error.message : "Nao foi possivel carregar dados de criptoativos.");
+    } finally {
+      setCryptoLoading(false);
+    }
+  }
+
 
 
   function addPayment(event: React.FormEvent<HTMLFormElement>) {
@@ -1121,25 +1142,19 @@ export default function AlfatecInvestPro() {
 
   async function changePassword(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!currentUser) return;
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
     const current = String(formData.get("currentPassword") ?? "");
     const next = String(formData.get("newPassword") ?? "");
     const confirm = String(formData.get("confirmPassword") ?? "");
-    if (!isStrongPassword(next) || next !== confirm) {
-      alert(next !== confirm ? "A confirmação deve ser igual à nova senha." : passwordRequirementMessage());
-      return;
-    }
-    const currentHash = await sha256(current);
-    if (currentHash !== currentUser.passwordHash) {
-      alert("Senha atual incorreta.");
-      return;
-    }
-    const nextHash = await sha256(next);
-    updateClient(currentUser.id, { passwordHash: nextHash });
-    setAccounts((currentAccounts) => currentAccounts.map((account) => account.id === currentUser.id ? { ...account, passwordHash: nextHash } : account));
-    alert("Senha alterada com sucesso.");
-    event.currentTarget.reset();
+    if (!isStrongPassword(next) || next !== confirm) { alert(next !== confirm ? "A confirmacao deve ser igual a nova senha." : passwordRequirementMessage()); return; }
+    try {
+      const response = await fetch("/api/auth/change-password", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ currentPassword: current, newPassword: next }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error ?? "Nao foi possivel alterar a senha.");
+      alert(data.message ?? "Senha alterada com sucesso.");
+      form.reset();
+    } catch (error) { alert(error instanceof Error ? error.message : "Nao foi possivel alterar a senha."); }
   }
 
   function exportAdminReport() {
@@ -1200,6 +1215,16 @@ export default function AlfatecInvestPro() {
   }
 
 
+  function exportCryptoReportCsv() {
+    const header = "ticker,nome,categoria,preco_usd,variacao_24h,market_cap,volume_24h,score,classificacao,confianca,fundamentos,rede,tokenomics,seguranca,mercado,desenvolvimento,valuation_onchain,risco,fonte,atualizacao\n";
+    const rows = cryptoAnalyses.map((analysis) => {
+      const score = (key: string) => analysis.pillars.find((pillar) => pillar.key === key)?.score ?? "";
+      return [analysis.ticker, `"${analysis.name.replace(/"/g, "'")}"`, `"${analysis.categoryLabel}"`, analysis.snapshot.price ?? "", analysis.snapshot.change24h ?? "", analysis.snapshot.marketCap ?? "", analysis.snapshot.volume24h ?? "", analysis.score ?? "", analysis.classification, analysis.confidence, score("fundamentals"), score("network"), score("tokenomics"), score("security"), score("market"), score("development"), score("onChainValuation"), score("risk"), analysis.snapshot.source, analysis.snapshot.updatedAt].join(",");
+    });
+    downloadText("metodo-alfatec-cripto.csv", header + rows.join("\n"), "text/csv;charset=utf-8");
+  }
+
+
   const dashboardCards = [
     { label: "Patrimônio total", value: money.format(portfolioAnalysis.totalEquity), icon: WalletCards, tone: "teal" },
     { label: "Rentabilidade diária", value: pct(portfolioAnalysis.lines.reduce((s, l) => s + l.asset.changeDay * l.weight / 100, 0)), icon: TrendingUp, tone: "green" },
@@ -1222,14 +1247,11 @@ export default function AlfatecInvestPro() {
   if (currentUser.role === "CLIENTE" && (currentUser.status === "pendente" || currentUser.status === "bloqueado" || currentUser.status === "vencido" || isExpired(currentUser.dueDate))) {
     return (
       <Shell darkMode={darkMode} setDarkMode={setDarkMode} logout={logout} user={currentUser} modules={[]} activeId="" onMenu={() => undefined}>
-        <div className="mx-auto max-w-3xl py-16">
-          <PremiumCard title={currentUser.status === "pendente" ? "Acesso aguardando liberação" : "Acesso bloqueado"} description="Sua conta ainda não possui permissão ativa para acessar a plataforma." icon={Lock}>
-            <div className="rounded-3xl bg-red-500/10 p-6 text-red-500">
-              <p className="text-xl font-black">{currentUser.status === "pendente" ? "Seu cadastro foi recebido e aguarda liberação do administrador." : "Seu acesso está temporariamente bloqueado. Entre em contato com o administrador."}</p>
-              <p className="mt-2 text-sm">Status atual: {currentUser.status}. Vencimento: {currentUser.dueDate ?? "não informado"}.</p>
-            </div>
-            <button onClick={logout} className="mt-5 rounded-2xl bg-slate-950 px-5 py-3 font-bold text-white dark:bg-white dark:text-slate-950">Sair da conta</button>
+        <div className="mx-auto max-w-5xl py-8">
+          <PremiumCard title={currentUser.status === "pendente" ? "Acesso aguardando liberacao" : "Plano sem acesso ativo"} description="Seus dados permanecem preservados. Um pagamento confirmado pode renovar o acesso." icon={Lock}>
+            <div className="rounded-3xl bg-red-500/10 p-6 text-red-500"><p className="text-xl font-black">{currentUser.status === "pendente" ? "Seu cadastro foi recebido e aguarda liberacao do administrador." : "O acesso aos modulos pagos esta bloqueado, mas voce pode consultar e renovar o plano abaixo."}</p><p className="mt-2 text-sm">Status atual: {currentUser.status}. Vencimento: {currentUser.dueDate ?? "nao informado"}.</p></div>
           </PremiumCard>
+          {currentUser.status !== "pendente" && <div className="mt-6"><ClientPlanSection user={currentUser} plans={plans} payments={payments} /></div>}
         </div>
       </Shell>
     );
@@ -1329,6 +1351,7 @@ export default function AlfatecInvestPro() {
               <MetricCard label="Valores pendentes" value={money.format(financial.pending)} icon={CalendarDays} tone="red" />
             </div>
             <div className="mt-6"><PlanValuesManager plans={plans} history={planPriceHistory} clients={clients} payments={payments} onUpdatePlan={updateOfficialPlan} /></div>
+            <div className="mt-6"><AdminPaymentsPanel clients={clients} settings={paymentSettings} onChange={setPaymentSettings} /></div>
             <div className="mt-6 grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
               <PremiumCard title="Registrar pagamento" description="Baixe um pagamento e renove o acesso do cliente." icon={CircleDollarSign}>
                 <form onSubmit={addPayment} className="grid gap-3">
@@ -1405,7 +1428,7 @@ export default function AlfatecInvestPro() {
                   {marketQuoteMessage && <div className={cls("rounded-3xl border p-5 text-sm font-bold", marketQuoteStatus === "error" ? "border-amber-400/40 bg-amber-500/10 text-amber-600 dark:text-amber-300" : "border-cyan-400/40 bg-cyan-500/10 text-cyan-700 dark:text-cyan-200")}>{marketQuoteStatus === "loading" ? "Consultando cotação externa..." : marketQuoteMessage}</div>}
                 </div>
               </PremiumCard>
-              <AssetPanel asset={selectedAsset} favorites={favorites} setFavorites={setFavorites} onAddToPortfolio={(asset) => setPortfolio((current) => [{ id: crypto.randomUUID(), ticker: asset.ticker, quantity: 1, averagePrice: asset.price, broker: "Manual", purchaseDate: todayIso() }, ...current])} onOpenFiiAnalysis={(asset) => { setFiiAsset(asset); setFiiSearch(asset.ticker); setClientModule("alfatec_fiis"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_fiis"); }} />
+              <AssetPanel asset={selectedAsset} favorites={favorites} setFavorites={setFavorites} onAddToPortfolio={(asset) => setPortfolio((current) => [{ id: crypto.randomUUID(), ticker: asset.ticker, quantity: 1, averagePrice: asset.price, broker: "Manual", purchaseDate: todayIso() }, ...current])} onOpenFiiAnalysis={(asset) => { setFiiAsset(asset); setFiiSearch(asset.ticker); setClientModule("alfatec_fiis"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_fiis"); }} cryptoAnalysis={selectedAsset.type === "CRIPTO" ? cryptoAnalyses.find((item) => item.ticker === selectedAsset.ticker) ?? null : null} onOpenCryptoAnalysis={(asset) => { setCryptoTicker(asset.ticker); void loadCryptoData([asset.ticker]); setClientModule("alfatec_crypto_method"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_crypto_method"); }} />
             </div>
           </Section>
         )}
@@ -1448,21 +1471,30 @@ export default function AlfatecInvestPro() {
           </Section>
         )}
 
+        {clientModule === "oportunidades" && (
+          <div className="mt-6">
+            <PremiumCard title="Oportunidades em criptoativos" description="Score AlfaTec Cripto com dados reais, categoria, mercado, tokenomics, risco e confianca." icon={Bitcoin}>
+              <CryptoOpportunityFilters value={cryptoFilters} onChange={(patch) => setCryptoFilters((current) => ({ ...current, ...patch }))} categories={cryptoFilterCategories} />
+              <div className="mt-4"><CryptoOpportunityTable items={cryptoOpportunityAnalyses} onSelect={(ticker) => { setCryptoTicker(ticker); setClientModule("alfatec_crypto_method"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_crypto_method"); }} /></div>
+            </PremiumCard>
+          </div>
+        )}
+
         {clientModule === "comparador" && (
           <Section title="Comparador" subtitle="Compare qualquer combinação: ação, FII, ETF, BDR ou cripto." eyebrow="Gráfico profissional">
             <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
               <PremiumCard title="Comparar ativos" description="Use as barras de pesquisa para escolher os dois lados da comparação." icon={LineChartIcon}>
                 <div className="grid gap-4 lg:grid-cols-2">
-                  <SearchBox label="Pesquisar Ativo A" value={searchA} onChange={setSearchA} assets={assets} onSelect={(asset) => { setAssetA(asset); setSearchA(asset.ticker); }} />
-                  <SearchBox label="Pesquisar Ativo B" value={searchB} onChange={setSearchB} assets={assets} onSelect={(asset) => { setAssetB(asset); setSearchB(asset.ticker); }} />
+                  <SearchBox label="Pesquisar Ativo A" value={searchA} onChange={setSearchA} assets={assets} onSelect={(asset) => { setAssetA(asset); setSearchA(asset.ticker); if (asset.type === "CRIPTO") void loadCryptoData([asset.ticker]); }} />
+                  <SearchBox label="Pesquisar Ativo B" value={searchB} onChange={setSearchB} assets={assets} onSelect={(asset) => { setAssetB(asset); setSearchB(asset.ticker); if (asset.type === "CRIPTO") void loadCryptoData([asset.ticker]); }} />
                 </div>
                 <div className="mt-5 flex flex-wrap gap-2">{ranges.map((item) => <button key={item.id} onClick={() => setRange(item.id)} className={cls("rounded-full px-4 py-2 text-sm font-bold", range === item.id ? "bg-teal-500 text-white" : "bg-slate-100 dark:bg-white/10")}>{item.label}</button>)}</div>
                 <div className="mt-5 grid gap-4 lg:grid-cols-2"><PerformancePill asset={assetA} value={returnA} /><PerformancePill asset={assetB} value={returnB} /></div>
-                <div className="mt-5 h-[430px]"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={comparison}><CartesianGrid strokeDasharray="3 3" opacity={0.16} /><XAxis dataKey="label" minTickGap={28} /><YAxis yAxisId="left" unit="%" /><YAxis yAxisId="right" orientation="right" tickFormatter={(value) => compactMoney.format(Number(value))} /><Tooltip formatter={(value, name) => name === "Volume" ? compactMoney.format(Number(value)) : `${value}%`} /><Legend /><Bar yAxisId="right" dataKey="volumeA" name="Volume" fill="#334155" opacity={0.22} /><Line yAxisId="left" type="monotone" dataKey={assetA.ticker} name={`${assetA.ticker} %`} stroke="#14b8a6" strokeWidth={3} dot={false} /><Line yAxisId="left" type="monotone" dataKey={assetB.ticker} name={`${assetB.ticker} %`} stroke="#38bdf8" strokeWidth={3} dot={false} /></ComposedChart></ResponsiveContainer></div>
+                <div className="mt-5 h-[430px]"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={comparison}><CartesianGrid strokeDasharray="3 3" opacity={0.16} /><XAxis dataKey="label" minTickGap={28} /><YAxis yAxisId="left" unit="%" /><YAxis yAxisId="right" orientation="right" tickFormatter={(value) => compactMoney.format(Number(value))} /><Tooltip formatter={(value, name) => name === "Volume" ? compactMoney.format(Number(value)) : `${value}%`} /><Bar yAxisId="right" dataKey="volumeA" name="Volume" fill="#334155" opacity={0.22} /><Line yAxisId="left" type="monotone" dataKey={assetA.ticker} name={`${assetA.ticker} %`} stroke="#14b8a6" strokeWidth={3} dot={false} /><Line yAxisId="left" type="monotone" dataKey={assetB.ticker} name={`${assetB.ticker} %`} stroke="#38bdf8" strokeWidth={3} dot={false} /></ComposedChart></ResponsiveContainer></div>
                 <ComparisonTable a={assetA} b={assetB} />
-                {assetA.type === "FII" && assetB.type === "FII" ? <FiiComparison a={assetA} b={assetB} assets={assets} settings={fiiSettings} /> : <GrahamComparison a={assetA} b={assetB} />}
+                {assetA.type === "FII" && assetB.type === "FII" ? <FiiComparison a={assetA} b={assetB} assets={assets} settings={fiiSettings} /> : assetA.type === "CRIPTO" && assetB.type === "CRIPTO" && cryptoAnalyses.find((item) => item.ticker === assetA.ticker) && cryptoAnalyses.find((item) => item.ticker === assetB.ticker) ? <CryptoComparison a={cryptoAnalyses.find((item) => item.ticker === assetA.ticker)!} b={cryptoAnalyses.find((item) => item.ticker === assetB.ticker)!} /> : assetA.type === "CRIPTO" || assetB.type === "CRIPTO" ? <p className="mt-5 rounded-2xl bg-amber-500/10 p-3 text-sm font-semibold text-amber-700 dark:text-amber-300">Selecione dois criptoativos com dados carregados para usar o Metodo AlfaTec Cripto. Graham nao e aplicado a cripto.</p> : <GrahamComparison a={assetA} b={assetB} />}
               </PremiumCard>
-              <ComparisonRecommendationCard recommendation={comparisonRecommendation} a={assetA} b={assetB} returnA={returnA} returnB={returnB} />
+              {assetA.type === "CRIPTO" && assetB.type === "CRIPTO" ? <PremiumCard title="Leitura comparativa cripto" description="Maior score segundo este metodo, sem indicar automaticamente o melhor investimento." icon={Bitcoin}><p className="text-sm text-slate-600 dark:text-slate-300">Use categoria, confianca, risco e disponibilidade dos dados em conjunto. Ativos de categorias diferentes nao possuem comparacao direta equivalente.</p></PremiumCard> : <ComparisonRecommendationCard recommendation={comparisonRecommendation} a={assetA} b={assetB} returnA={returnA} returnB={returnB} />}
             </div>
           </Section>
         )}
@@ -1490,6 +1522,8 @@ export default function AlfatecInvestPro() {
 
         {clientModule === "alfatec_fiis" && <AlfatecFiiSection assets={assets} selectedAsset={fiiAsset} search={fiiSearch} setSearch={setFiiSearch} setSelectedAsset={setFiiAsset} currentUser={currentUser} settings={fiiSettings} saveSettings={saveFiiSettings} filters={fiiFilters} setFilters={setFiiFilters} segments={fiiSegments} opportunities={fiiOpportunityAnalyses} />}
 
+        {clientModule === "alfatec_crypto_method" && <AlfatecCryptoSection assets={assets} analyses={cryptoAnalyses} selectedTicker={cryptoTicker} loading={cryptoLoading} error={cryptoError} currentUserRole={currentUser.role} settings={cryptoSettings} onSelect={(ticker) => { setCryptoTicker(ticker); void loadCryptoData([ticker]); }} onRefresh={(ticker) => void loadCryptoData([ticker])} onSaveSettings={saveCryptoSettings} />}
+
         {clientModule === "plano" && <ClientPlanSection user={currentUser} plans={plans} payments={payments} />}
 
         {clientModule === "radar" && (
@@ -1501,6 +1535,13 @@ export default function AlfatecInvestPro() {
                 <PremiumCard title="Radar IA - FIIs" description="Filtros e ranking com o Método AlfaTec FIIs, identificado separadamente das ações." icon={Building2}>
                   <FiiOpportunityFilters value={radarFiiFilters} onChange={(patch) => setRadarFiiFilters((current) => ({ ...current, ...patch }))} segments={fiiSegments} />
                   <div className="mt-4"><FiiRadarTable items={radarFiiAnalyses.slice(0, 12)} onSelect={(asset) => { setFiiAsset(asset); setFiiSearch(asset.ticker); setClientModule("alfatec_fiis"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_fiis"); }} /></div>
+                </PremiumCard>
+              </div>
+              <div className="xl:col-span-2">
+                <PremiumCard title="Radar IA - Criptoativos" description="Ranking separado com o Metodo AlfaTec Cripto e explicacao dos fatores." icon={Bitcoin}>
+                  <CryptoOpportunityFilters value={radarCryptoFilters} onChange={(patch) => setRadarCryptoFilters((current) => ({ ...current, ...patch }))} categories={cryptoFilterCategories} />
+                  <div className="mt-4"><CryptoOpportunityTable items={radarCryptoAnalyses} onSelect={(ticker) => { setCryptoTicker(ticker); setClientModule("alfatec_crypto_method"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_crypto_method"); }} /></div>
+                  <p className="mt-3 text-xs text-slate-500 dark:text-slate-300">O radar usa fundamentos, rede, tokenomics, seguranca, mercado, desenvolvimento, valuation on-chain e risco. Nao produz comando de compra ou venda.</p>
                 </PremiumCard>
               </div>
             </div>
@@ -1519,6 +1560,13 @@ export default function AlfatecInvestPro() {
                 <div className="mt-4"><FiiOpportunitiesTable items={fiiOpportunityAnalyses.slice(0, 8)} onSelect={(asset) => { setFiiAsset(asset); setFiiSearch(asset.ticker); setClientModule("alfatec_fiis"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_fiis"); }} /></div>
                 <div className="mt-5 flex flex-wrap gap-3"><button onClick={exportFiiReportCsv} className="rounded-2xl bg-teal-500 px-5 py-3 font-bold text-white"><Download className="mr-2 inline h-4 w-4" />Exportar CSV de FIIs</button><button onClick={() => window.print()} className="rounded-2xl bg-slate-950 px-5 py-3 font-bold text-white dark:bg-white dark:text-slate-950">Imprimir / PDF</button></div>
               </PremiumCard>
+            <div className="mt-6">
+              <PremiumCard title="Relatorio de criptoativos" description="Score AlfaTec Cripto, pilares, riscos, confianca, fonte e atualizacao." icon={Bitcoin}>
+                <div className="grid gap-3 sm:grid-cols-3"><InfoTile label="Criptoativos analisados" value={String(cryptoAnalyses.length)} /><InfoTile label="Maior score" value={cryptoOpportunityAnalyses[0]?.ticker ?? "-"} /><InfoTile label="Fonte" value="CoinGecko" /></div>
+                <div className="mt-4"><CryptoOpportunityTable items={cryptoAnalyses.filter((item) => item.score !== null).sort((a, b) => (b.score ?? 0) - (a.score ?? 0))} onSelect={(ticker) => { setCryptoTicker(ticker); setClientModule("alfatec_crypto_method"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_crypto_method"); }} /></div>
+                <div className="mt-5 flex flex-wrap gap-3"><button onClick={exportCryptoReportCsv} className="rounded-2xl bg-teal-500 px-5 py-3 font-bold text-white"><Download className="mr-2 inline h-4 w-4" />Exportar CSV de cripto</button><button onClick={() => window.print()} className="rounded-2xl bg-slate-950 px-5 py-3 font-bold text-white dark:bg-white dark:text-slate-950">Imprimir / PDF</button></div>
+              </PremiumCard>
+            </div>
             </div>
           </Section>
         )}
@@ -1746,9 +1794,9 @@ function MetricCard({ label, value, icon: Icon, tone }: { label: string; value: 
 function AssetCard({ asset, favorites, onSelect, onFavorite }: { asset: Asset; favorites: string[]; onSelect: () => void; onFavorite: () => void }) {
   return <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/5"><div className="flex items-start justify-between gap-3"><button onClick={onSelect} className="text-left"><p className="text-xs text-slate-500 dark:text-slate-300">{typeLabels[asset.type]} • {asset.segment}</p><h3 className="mt-1 text-xl font-black">{asset.ticker}</h3><p className="text-sm text-slate-500 dark:text-slate-300">{asset.name}</p>{asset.source === "external" && <p className="mt-2 text-xs font-bold text-cyan-600 dark:text-cyan-300">Fonte: Google Finance via provedor externo</p>}</button><button onClick={onFavorite} className="rounded-xl bg-white p-2 dark:bg-white/10"><Star className={cls("h-4 w-4", favorites.includes(asset.ticker) && "fill-amber-400 text-amber-400")} /></button></div><div className="mt-4 grid grid-cols-3 gap-2"><InfoTile label="Preço" value={money.format(asset.price)} /><InfoTile label="Dia" value={pct(asset.changeDay)} /><InfoTile label="Score" value={`${asset.score}/100`} /></div></div>;
 }
-function AssetPanel({ asset, favorites, setFavorites, onAddToPortfolio, onOpenFiiAnalysis }: { asset: Asset; favorites: string[]; setFavorites: React.Dispatch<React.SetStateAction<string[]>>; onAddToPortfolio: (asset: Asset) => void; onOpenFiiAnalysis?: (asset: Asset) => void }) {
+function AssetPanel({ asset, favorites, setFavorites, onAddToPortfolio, onOpenFiiAnalysis, cryptoAnalysis, onOpenCryptoAnalysis }: { asset: Asset; favorites: string[]; setFavorites: React.Dispatch<React.SetStateAction<string[]>>; onAddToPortfolio: (asset: Asset) => void; onOpenFiiAnalysis?: (asset: Asset) => void; cryptoAnalysis?: AlfatecCryptoAnalysis | null; onOpenCryptoAnalysis?: (asset: Asset) => void }) {
   const isFavorite = favorites.includes(asset.ticker);
-  return <PremiumCard title="Página do ativo" description="Informações, indicadores, IA e fundamentos." icon={ShieldCheck}><div className="rounded-3xl bg-gradient-to-br from-slate-950 to-slate-800 p-5 text-white"><div className="flex items-start justify-between gap-4"><div><p className="text-sm text-cyan-300">{typeLabels[asset.type]} • {asset.segment}</p><h3 className="mt-1 text-3xl font-black">{asset.ticker}</h3><p className="text-slate-300">{asset.name}</p></div><button onClick={() => setFavorites((current) => isFavorite ? current.filter((ticker) => ticker !== asset.ticker) : [asset.ticker, ...current])} className="rounded-2xl bg-white/10 p-3 hover:bg-white/20"><Star className={cls("h-5 w-5", isFavorite && "fill-amber-400 text-amber-400")} /></button></div><div className="mt-6 grid grid-cols-3 gap-3"><InfoTile dark label="Preço" value={money.format(asset.price)} /><InfoTile dark label="Ano" value={pct(asset.changeYear)} /><InfoTile dark label="Score" value={`${asset.score}/100`} /></div></div><div className="mt-4 grid grid-cols-2 gap-3"><InfoTile label="Mercado" value={asset.market} /><InfoTile label="Setor" value={asset.sector} /><InfoTile label="Liquidez" value={compactMoney.format(asset.liquidity)} /><InfoTile label="Risco" value={asset.risk} /><InfoTile label="Dividend Yield" value={pct(asset.metrics.dividendYield)} /><InfoTile label="P/VP" value={metric(asset.metrics.pvp)} /><InfoTile label="P/L" value={metric(asset.metrics.pl)} /><InfoTile label="ROE" value={pct(asset.metrics.roe)} /></div><div className="mt-4 rounded-3xl border border-slate-200 p-4 dark:border-white/10"><p className="mb-2 text-sm font-black">Resumo IA do ativo</p><p className="text-sm text-slate-600 dark:text-slate-300">{asset.summary}</p><ul className="mt-3 space-y-2">{generateAiNotes(asset).map((note) => <li key={note} className="flex gap-2 text-sm text-slate-600 dark:text-slate-300"><ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-cyan-500" />{note}</li>)}</ul></div>{asset.source === "external" && <p className="mt-3 text-sm font-bold text-cyan-600 dark:text-cyan-300">Fonte: Google Finance via provedor externo</p>}{asset.type === "FII" && <FiiAssetMiniSummary asset={asset} onOpen={() => onOpenFiiAnalysis?.(asset)} />}<a href={googleFinanceUrl(asset)} target="_blank" rel="noreferrer" className="mt-4 flex w-full items-center justify-center rounded-2xl border border-slate-200 px-4 py-3 font-bold text-slate-700 transition hover:bg-slate-50 dark:border-white/10 dark:text-slate-100 dark:hover:bg-white/10">Abrir no Google Finanças</a><button onClick={() => onAddToPortfolio(asset)} className="mt-3 w-full rounded-2xl bg-cyan-500 px-4 py-3 font-bold text-white">Adicionar à carteira</button></PremiumCard>;
+  return <PremiumCard title="Página do ativo" description="Informações, indicadores, IA e fundamentos." icon={ShieldCheck}><div className="rounded-3xl bg-gradient-to-br from-slate-950 to-slate-800 p-5 text-white"><div className="flex items-start justify-between gap-4"><div><p className="text-sm text-cyan-300">{typeLabels[asset.type]} • {asset.segment}</p><h3 className="mt-1 text-3xl font-black">{asset.ticker}</h3><p className="text-slate-300">{asset.name}</p></div><button onClick={() => setFavorites((current) => isFavorite ? current.filter((ticker) => ticker !== asset.ticker) : [asset.ticker, ...current])} className="rounded-2xl bg-white/10 p-3 hover:bg-white/20"><Star className={cls("h-5 w-5", isFavorite && "fill-amber-400 text-amber-400")} /></button></div><div className="mt-6 grid grid-cols-3 gap-3"><InfoTile dark label="Preço" value={money.format(asset.price)} /><InfoTile dark label="Ano" value={pct(asset.changeYear)} /><InfoTile dark label="Score" value={`${asset.score}/100`} /></div></div><div className="mt-4 grid grid-cols-2 gap-3"><InfoTile label="Mercado" value={asset.market} /><InfoTile label="Setor" value={asset.sector} /><InfoTile label="Liquidez" value={compactMoney.format(asset.liquidity)} /><InfoTile label="Risco" value={asset.risk} /><InfoTile label="Dividend Yield" value={pct(asset.metrics.dividendYield)} /><InfoTile label="P/VP" value={metric(asset.metrics.pvp)} /><InfoTile label="P/L" value={metric(asset.metrics.pl)} /><InfoTile label="ROE" value={pct(asset.metrics.roe)} /></div><div className="mt-4 rounded-3xl border border-slate-200 p-4 dark:border-white/10"><p className="mb-2 text-sm font-black">Resumo IA do ativo</p><p className="text-sm text-slate-600 dark:text-slate-300">{asset.summary}</p><ul className="mt-3 space-y-2">{generateAiNotes(asset).map((note) => <li key={note} className="flex gap-2 text-sm text-slate-600 dark:text-slate-300"><ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-cyan-500" />{note}</li>)}</ul></div>{asset.source === "external" && <p className="mt-3 text-sm font-bold text-cyan-600 dark:text-cyan-300">Fonte: Google Finance via provedor externo</p>}{asset.type === "FII" && <FiiAssetMiniSummary asset={asset} onOpen={() => onOpenFiiAnalysis?.(asset)} />}{asset.type === "CRIPTO" && <CryptoMiniSummary analysis={cryptoAnalysis ?? null} onOpen={() => onOpenCryptoAnalysis?.(asset)} />}<a href={googleFinanceUrl(asset)} target="_blank" rel="noreferrer" className="mt-4 flex w-full items-center justify-center rounded-2xl border border-slate-200 px-4 py-3 font-bold text-slate-700 transition hover:bg-slate-50 dark:border-white/10 dark:text-slate-100 dark:hover:bg-white/10">Abrir no Google Finanças</a><button onClick={() => onAddToPortfolio(asset)} className="mt-3 w-full rounded-2xl bg-cyan-500 px-4 py-3 font-bold text-white">Adicionar à carteira</button></PremiumCard>;
 }
 function FiiAssetMiniSummary({ asset, onOpen }: { asset: Asset; onOpen: () => void }) {
   const analysis = analisarAlfatecFii(asset);
@@ -1889,7 +1937,7 @@ function ClientPlanSection({ user, plans, payments }: { user: Account; plans: Pl
   const days = calcularDiasRestantes(user.dueDate ?? todayIso());
   const status = planVisualStatus(user);
   const alert = planAlertText(user);
-  return <Section title="Plano" subtitle="Assinatura, vencimento, dias restantes e recursos liberados." eyebrow="Meu acesso"><div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]"><PremiumCard title="Plano atual" description="Valor contratado e validade do acesso." icon={WalletCards}><div className="grid gap-3 sm:grid-cols-2"><InfoTile label="Plano" value={plan?.name ?? "Sem plano"} /><InfoTile label="Valor" value={money.format(user.planValue ?? plan?.value ?? 0)} /><InfoTile label="Início" value={user.planStartedAt ? new Date(user.planStartedAt).toLocaleDateString("pt-BR") : "-"} /><InfoTile label="Vencimento" value={user.dueDate ? new Date(user.dueDate).toLocaleDateString("pt-BR") : "-"} /><InfoTile label="Duração" value={`${plan?.durationDays ?? 0} dias`} /><InfoTile label="Dias restantes" value={`${days} dias`} /><InfoTile label="Status" value={status.label} /><InfoTile label="Último pagamento" value={lastPayment ? money.format(lastPayment.value) : "-"} /></div>{alert && <p className="mt-4 rounded-2xl bg-amber-500/10 p-3 text-sm font-bold text-amber-700 dark:text-amber-300">{alert}</p>}<p className="mt-4 rounded-2xl bg-slate-50 p-3 text-sm text-slate-600 dark:bg-white/5 dark:text-slate-300">{status.detail}</p><a href="mailto:admin@alfatec.local" className="mt-4 inline-flex rounded-2xl bg-cyan-500 px-5 py-3 font-bold text-white">Entrar em contato com o administrador</a></PremiumCard><PremiumCard title="Menus liberados" description="Recursos disponíveis conforme plano e permissões do cliente." icon={ShieldCheck}><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{clientModules.map((module) => <div key={module.id} className={cls("rounded-2xl p-3 text-sm font-bold", user.permissions.includes(module.id) ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "bg-slate-100 text-slate-500 dark:bg-white/5 dark:text-slate-400")}>{user.permissions.includes(module.id) ? "Liberado" : "Bloqueado"} - {module.label}</div>)}</div></PremiumCard></div></Section>;
+  return <Section title="Plano" subtitle="Assinatura, vencimento, dias restantes e recursos liberados." eyebrow="Meu acesso"><div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]"><PremiumCard title="Plano atual" description="Valor contratado e validade do acesso." icon={WalletCards}><div className="grid gap-3 sm:grid-cols-2"><InfoTile label="Plano" value={plan?.name ?? "Sem plano"} /><InfoTile label="Valor" value={money.format(user.planValue ?? plan?.value ?? 0)} /><InfoTile label="Inicio" value={user.planStartedAt ? new Date(user.planStartedAt).toLocaleDateString("pt-BR") : "-"} /><InfoTile label="Vencimento" value={user.dueDate ? new Date(user.dueDate).toLocaleDateString("pt-BR") : "-"} /><InfoTile label="Duracao" value={`${plan?.durationDays ?? 0} dias`} /><InfoTile label="Dias restantes" value={`${days} dias`} /><InfoTile label="Status" value={status.label} /><InfoTile label="Ultimo pagamento" value={lastPayment ? money.format(lastPayment.value) : "-"} /></div>{alert && <p className="mt-4 rounded-2xl bg-amber-500/10 p-3 text-sm font-bold text-amber-700 dark:text-amber-300">{alert}</p>}<p className="mt-4 rounded-2xl bg-slate-50 p-3 text-sm text-slate-600 dark:bg-white/5 dark:text-slate-300">{status.detail}</p><a href="mailto:admin@alfatec.local" className="mt-4 inline-flex rounded-2xl bg-cyan-500 px-5 py-3 font-bold text-white">Entrar em contato com o administrador</a></PremiumCard><PremiumCard title="Menus liberados" description="Recursos disponiveis conforme plano e permissoes do cliente." icon={ShieldCheck}><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{clientModules.map((module) => <div key={module.id} className={cls("rounded-2xl p-3 text-sm font-bold", user.permissions.includes(module.id) ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "bg-slate-100 text-slate-500 dark:bg-white/5 dark:text-slate-400")}>{user.permissions.includes(module.id) ? "Liberado" : "Bloqueado"} - {module.label}</div>)}</div></PremiumCard></div><div className="mt-6"><h3 className="mb-4 text-xl font-black">Assinar ou renovar plano</h3><ClientPaymentCheckout plans={plans} currentPlanId={user.planId} /></div></Section>;
 }
 
 function PlanPriceEditor({ plan, onUpdatePlan }: { plan: Plan; onUpdatePlan: (planId: string, patch: Partial<Plan>, notes?: string) => void }) {

@@ -1,6 +1,9 @@
 import { get, put } from "@vercel/blob";
+import bcrypt from "bcryptjs";
+import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { hasDatabaseUrl, prisma } from "@/lib/prisma";
+import { revokeUserSessions, sessionUserId } from "@/lib/auth/session";
 
 export const runtime = "nodejs";
 
@@ -12,14 +15,21 @@ type AppStatePayload = {
   planPriceHistory: unknown[];
   grahamSettings: Record<string, unknown>;
   fiiSettings: Record<string, unknown>;
+  cryptoSettings: Record<string, unknown>;
+  paymentSettings: Record<string, unknown>;
   auditLogs: unknown[];
 };
 
-const allClientModules = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "radar", "relatorios", "graham_valuation", "alfatec_fiis", "plano", "configuracoes"];
+const allClientModules = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "radar", "relatorios", "graham_valuation", "alfatec_fiis", "alfatec_crypto_method", "plano", "configuracoes"];
 const appStateBlobPath = process.env.APP_STATE_BLOB_PATH || "alfatec-invest-pro/app-state.json";
 const defaultGrahamSettings = { defaultY: 5.5, minGrowth: 0, maxGrowth: 20, scoreWeight: 10, enabled: true, clientsCanEditGrowth: true, clientsCanEditY: false };
 const defaultFiiWeights = { qualidade: 20, renda: 18, risco: 16, valuation: 14, gestao: 12, liquidez: 6, diversificacao: 14 };
 const defaultFiiSettings = { enabled: true, referenceRate: 6.5, referenceRateSource: "Parametro configurado pelo administrador", minimumConfidence: "Media", weightsByKind: { tijolo: { qualidade: 20, renda: 20, risco: 15, valuation: 15, gestao: 10, liquidez: 5, diversificacao: 15 }, renda_urbana: { qualidade: 20, renda: 20, risco: 15, valuation: 15, gestao: 10, liquidez: 5, diversificacao: 15 }, papel: { qualidade: 25, renda: 15, risco: 20, valuation: 10, gestao: 10, liquidez: 5, diversificacao: 15 }, fof: { qualidade: 25, renda: 15, risco: 10, valuation: 15, gestao: 20, liquidez: 5, diversificacao: 10 }, hibrido: defaultFiiWeights, desenvolvimento: { qualidade: 20, renda: 10, risco: 25, valuation: 15, gestao: 15, liquidez: 5, diversificacao: 10 }, infraestrutura: { qualidade: 20, renda: 20, risco: 15, valuation: 15, gestao: 10, liquidez: 5, diversificacao: 15 }, outro: { qualidade: 18, renda: 18, risco: 18, valuation: 16, gestao: 10, liquidez: 8, diversificacao: 12 } } };
+const genericCryptoWeights = { fundamentals: 25, network: 20, tokenomics: 15, security: 15, market: 10, development: 5, onChainValuation: 5, risk: 5 };
+const cryptoCategories = ["monetary", "payment", "smart_contract", "infrastructure", "interoperability", "oracle", "defi", "governance", "exchange", "layer_1", "layer_2", "stablecoin", "rwa", "ai", "gaming", "nft", "memecoin", "other"];
+const defaultCryptoSettings = { enabled: true, minimumConfidence: "Baixa", weightsByCategory: Object.fromEntries(cryptoCategories.map((category) => [category, genericCryptoWeights])) };
+const defaultPaymentSettings = { provider: "mercado_pago", pixDiscountPercent: 0, pixExpirationMinutes: 30, cardInstallments: 12, annualInstallmentsEnabled: true, gracePeriodDays: 3, renewalMode: "extend", testMode: true };
+
 
 const defaultState: AppStatePayload = {
   accounts: [
@@ -29,28 +39,11 @@ const defaultState: AppStatePayload = {
       username: "Flauzino",
       email: "admin@alfatec.local",
       name: "Flauzino",
-      passwordHash: "cc5c75de95387000d28fce6a21f4d8c4ff8560b1b37e73d39eb63c3029697db5",
+      passwordHash: bcrypt.hashSync(process.env.ADMIN_BOOTSTRAP_PASSWORD || randomBytes(32).toString("base64url"), 12),
       status: "ativo",
       createdAt: new Date().toISOString().slice(0, 10),
       permissions: allClientModules
     },
-    {
-      id: "client-tutu",
-      role: "CLIENTE",
-      username: "Tutu",
-      email: "arthurcruz@gmail.com",
-      name: "Tutu",
-      phone: "",
-      passwordHash: "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
-      planId: "semanal",
-      planValue: 9.9,
-      status: "ativo",
-      createdAt: new Date().toISOString().slice(0, 10),
-      dueDate: "2026-07-20",
-      notes: "Cliente preservado do cadastro existente.",
-      planStartedAt: new Date().toISOString().slice(0, 10),
-      permissions: allClientModules
-    }
   ],
   plans: [
     { id: "semanal", name: "Semanal", value: 9.9, durationDays: 7, status: "ativo", permissions: allClientModules },
@@ -62,6 +55,8 @@ const defaultState: AppStatePayload = {
   planPriceHistory: [],
   grahamSettings: defaultGrahamSettings,
   fiiSettings: defaultFiiSettings,
+  cryptoSettings: defaultCryptoSettings,
+  paymentSettings: defaultPaymentSettings,
   auditLogs: []
 };
 
@@ -115,6 +110,8 @@ function normalizeState(value: unknown): AppStatePayload {
     planPriceHistory: Array.isArray(input.planPriceHistory) ? input.planPriceHistory : [],
     grahamSettings: input.grahamSettings && typeof input.grahamSettings === "object" ? { ...defaultGrahamSettings, ...input.grahamSettings } : defaultGrahamSettings,
     fiiSettings: input.fiiSettings && typeof input.fiiSettings === "object" ? { ...defaultFiiSettings, ...input.fiiSettings } : defaultFiiSettings,
+    cryptoSettings: input.cryptoSettings && typeof input.cryptoSettings === "object" ? { ...defaultCryptoSettings, ...input.cryptoSettings } : defaultCryptoSettings,
+    paymentSettings: input.paymentSettings && typeof input.paymentSettings === "object" ? { ...defaultPaymentSettings, ...input.paymentSettings } : defaultPaymentSettings,
     auditLogs: Array.isArray(input.auditLogs) ? input.auditLogs : []
   };
 }
@@ -132,8 +129,7 @@ function requestOriginAllowed(request: Request) {
     const originUrl = new URL(origin);
     const isSameHost = originUrl.host === requestUrl.host;
     const isLocalhost = ["localhost", "127.0.0.1"].includes(originUrl.hostname);
-    const isVercel = originUrl.hostname.endsWith(".vercel.app");
-    return isSameHost || (process.env.NODE_ENV !== "production" && isLocalhost) || isVercel;
+    return isSameHost || (process.env.NODE_ENV !== "production" && isLocalhost);
   } catch {
     return false;
   }
@@ -229,30 +225,65 @@ async function writeState(state: AppStatePayload) {
   throw new Error("PERSISTENT_STORAGE_NOT_CONFIGURED");
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   if (storageProvider() === "not-configured") return storageNotConfiguredResponse();
-
   try {
-    const response = NextResponse.json(await readState());
+    const state = await readState();
+    const userId = await sessionUserId(request);
+    const current = state.accounts.find((item) => stringField(item, "id") === userId?.toLowerCase());
+    const role = current && typeof current === "object" ? String((current as Record<string, unknown>).role ?? "") : "";
+    const withoutHashes = (items: unknown[]) => items.map((item) => item && typeof item === "object" ? { ...(item as Record<string, unknown>), passwordHash: "" } : item);
+    const safeState = !userId
+      ? { ...state, accounts: [], payments: [], portfolio: [], planPriceHistory: [], auditLogs: [] }
+      : role === "ADMIN"
+        ? { ...state, accounts: withoutHashes(state.accounts) }
+        : { ...state, accounts: withoutHashes(current ? [current] : []), payments: state.payments.filter((item) => stringField(item, "clientId") === userId.toLowerCase()), planPriceHistory: [], auditLogs: [] };
+    const response = NextResponse.json(safeState);
     response.headers.set("x-alfatec-storage", storageProvider());
     return response;
   } catch (error) {
     console.error("Erro ao carregar estado persistente", error);
-    return NextResponse.json({ error: "Não foi possível carregar os dados do banco permanente." }, { status: 500 });
+    return NextResponse.json({ error: "N?o foi poss?vel carregar os dados do banco permanente." }, { status: 500 });
   }
 }
 
 export async function PUT(request: Request) {
   if (storageProvider() === "not-configured") return storageNotConfiguredResponse();
-  if (!requestOriginAllowed(request)) return NextResponse.json({ error: "Origem da solicitação não autorizada." }, { status: 403 });
-  if (requestTooLarge(request)) return NextResponse.json({ error: "Solicitação muito grande." }, { status: 413 });
-
+  if (!requestOriginAllowed(request)) return NextResponse.json({ error: "Origem da solicita??o n?o autorizada." }, { status: 403 });
+  if (requestTooLarge(request)) return NextResponse.json({ error: "Solicita??o muito grande." }, { status: 413 });
+  const userId = await sessionUserId(request);
+  if (!userId) return NextResponse.json({ error: "Sess?o inv?lida ou expirada." }, { status: 401 });
   try {
-    const body = normalizeState(await request.json());
+    const current = await readState();
+    const actor = current.accounts.find((item) => stringField(item, "id") === userId.toLowerCase());
+    if (!actor || typeof actor !== "object") return NextResponse.json({ error: "Sess?o inv?lida." }, { status: 401 });
+    const role = String((actor as Record<string, unknown>).role ?? "");
+    const incoming = normalizeState(await request.json());
+    let body: AppStatePayload;
+    if (role === "ADMIN") {
+      const currentById = new Map(current.accounts.map((item) => [stringField(item, "id"), item]));
+      body = { ...incoming, accounts: incoming.accounts.filter((item) => currentById.has(stringField(item, "id"))).map((item) => item && typeof item === "object" ? { ...(item as Record<string, unknown>), passwordHash: String((currentById.get(stringField(item, "id")) as Record<string, unknown> | undefined)?.passwordHash ?? "") } : item) };
+    } else {
+      const requestedAccount = incoming.accounts.find((item) => stringField(item, "id") === userId.toLowerCase());
+      const accounts = current.accounts.map((item) => {
+        if (stringField(item, "id") !== userId.toLowerCase() || !item || typeof item !== "object" || !requestedAccount || typeof requestedAccount !== "object") return item;
+        const safe = requestedAccount as Record<string, unknown>;
+        const existing = item as Record<string, unknown>;
+        return { ...existing, name: safe.name ?? existing.name, email: safe.email ?? existing.email, phone: safe.phone ?? existing.phone, passwordHash: String(safe.passwordHash ?? "") || existing.passwordHash };
+      });
+      body = { ...current, accounts, portfolio: incoming.portfolio };
+    }
     await writeState(body);
+    if (role === "ADMIN") {
+      const previousById = new Map(current.accounts.map((item) => [stringField(item, "id"), item as Record<string, unknown>]));
+      for (const item of body.accounts) {
+        const before = previousById.get(stringField(item, "id")); const after = item as Record<string, unknown>;
+        if (before && (before.status !== after.status || before.role !== after.role) && after.status !== "ativo") await revokeUserSessions(String(after.id));
+      }
+    }
     return NextResponse.json({ ok: true, provider: storageProvider(), updatedAt: new Date().toISOString() });
   } catch (error) {
     console.error("Erro ao salvar estado persistente", error);
-    return NextResponse.json({ error: "Não foi possível salvar os dados no banco permanente." }, { status: 500 });
+    return NextResponse.json({ error: "N?o foi poss?vel salvar os dados no banco permanente." }, { status: 500 });
   }
 }

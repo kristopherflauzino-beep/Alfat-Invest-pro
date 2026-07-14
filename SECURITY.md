@@ -1,40 +1,34 @@
-# Segurança - ALFATEC INVEST PRO
+# Seguranca - ALFATEC INVEST PRO
 
-## Medidas Implementadas Neste Ciclo
+## Controles em uso
 
-- Estado persistente ampliado em `/api/app-state` para incluir historico de precos de planos, configuracoes Graham e auditoria.
-- Protecao basica de origem e limite de tamanho em operacoes `PUT /api/app-state`.
-- Headers de seguranca no Next.js: CSP, HSTS, `nosniff`, `DENY`, referrer policy, permissions policy, COOP e CORP.
-- `Cache-Control: private, no-store, max-age=0` nas rotas `/api/*`.
-- `.gitignore` reforcado para bloquear `.env.production`, `.env.development`, chaves, backups e dumps.
-- Regras de senha para novos cadastros/trocas elevadas para minimo de 12 caracteres, letras, numero e caractere especial.
-- Valores de planos com historico, auditoria e preservacao do valor contratado em pagamentos/renovacoes.
+- Cookies de sessao `httpOnly`, `Secure` em producao e `SameSite=Lax`.
+- Sessoes opacas em PostgreSQL, expiracao de 12 horas e revogacao em troca de senha/bloqueio.
+- bcrypt custo 12 para senhas novas e migracao de hashes legados no login.
+- Autenticacao e autorizacao no servidor para cadastro, checkout, status, recibos, assinaturas, conciliacao e estorno.
+- Origem validada nas mutacoes; entradas validadas com Zod.
+- Webhook Mercado Pago validado por HMAC e confirmado consultando o recurso no gateway.
+- Valores em centavos, idempotencia e transacao de ativacao para impedir dias/receita duplicados.
+- Checkout hospedado para cartao. A aplicacao nao recebe nem armazena PAN ou CVV.
+- Secrets somente no servidor e sem prefixo `NEXT_PUBLIC_`.
+- Respostas privadas com `Cache-Control: private, no-store`.
 
-## Pendencias De Risco
+## Configuracao Vercel
 
-| Pendencia | Risco | Observacao |
-|---|---:|---|
-| Migrar login para sessao opaca no servidor com cookie `httpOnly` | Alto | O app ainda usa fluxo legado client-side para preservar compatibilidade imediata. |
-| Hash de senha Argon2id/bcrypt no backend | Alto | Senhas novas ainda passam pelo fluxo SHA-256 legado do app. |
-| MFA TOTP obrigatorio para admin | Alto | Requer novas tabelas/rotas de autenticacao e segredo por usuario. |
-| RBAC em todas as Route Handlers | Alto | A rota de estado ainda e agregada; proximo passo e separar APIs por dominio. |
-| Banco PostgreSQL normalizado para usuarios, planos e pagamentos | Medio | Hoje ha persistencia via Postgres/Blob em JSON; funciona entre dispositivos, mas nao e o modelo final recomendado. |
-| Rate limiting distribuido | Medio | Deve ser configurado com Vercel Firewall/SDK ou Redis/KV. |
+1. Criar PostgreSQL de producao e outro para Preview, ambos com TLS.
+2. Definir as variaveis de `.env.example` separadamente em Development, Preview e Production.
+3. Executar `npm run db:migrate` com backup e revisao antes da producao.
+4. Configurar o webhook Mercado Pago para `/api/webhooks/payments/mercado-pago`.
+5. Agendar `/api/cron/payments/reconcile` com `Authorization: Bearer CRON_SECRET`.
+6. Criar regras de Firewall para `/api/auth/*`, `/api/admin/*`, `/api/payments/*` e `/api/webhooks/*`.
+7. Proteger Preview Deployments e nunca conectar Preview ao banco real.
 
-## Configuracao Na Vercel
+## Configuracao GitHub
 
-1. Definir variaveis por ambiente: `DATABASE_URL` ou `BLOB_READ_WRITE_TOKEN`, `SESSION_SECRET`, `SERPAPI_KEY` e credenciais SMTP quando houver.
-2. Usar variaveis sensiveis da Vercel e separar Production, Preview e Development.
-3. Ativar Vercel Firewall/WAF para `/api/auth/*`, `/api/admin/*`, `/api/app-state`, `/api/quotes/*` e `/api/reports/*`.
-4. Criar regra de rate limit para login/cadastro/reset quando essas rotas forem migradas para backend.
-5. Proteger Preview Deployments quando houver dados reais.
+Ative MFA, branch protection, pull request obrigatorio, secret scanning, push protection, Dependabot e checks `npm run typecheck`, `npm test` e `npm run build`.
 
-## Configuracao No GitHub
+## Pendencias
 
-1. Ativar MFA para colaboradores.
-2. Ativar secret scanning e push protection.
-3. Proteger `main` com PR obrigatorio e checks de build/testes.
-4. Ativar Dependabot.
-5. Nunca registrar dados reais de clientes, dumps, cookies, tokens ou chaves em issues, commits ou logs.
+MFA TOTP, rate limiting distribuido, e-mail transacional e teste real de backup/restauracao ainda dependem de infraestrutura externa. Consulte `SECURITY_CHECKLIST.md`.
 
-Seguranca e um processo continuo. Esta implementacao reduz risco em camadas, sem prometer seguranca absoluta.
+Reporte uma vulnerabilidade de forma privada ao responsavel do projeto. Nao publique credenciais, dados reais de clientes ou detalhes exploraveis em issues.

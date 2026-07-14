@@ -8,31 +8,31 @@ datasource db {
 }
 
 model Asset {
-  id            String   @id @default(cuid())
-  ticker        String   @unique
-  name          String
-  type          String
-  market        String
-  sector        String
-  segment       String
-  currency      String   @default("BRL")
-  price         Float
-  source        String   @default("local")
-  payload       Json
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id        String   @id @default(cuid())
+  ticker    String   @unique
+  name      String
+  type      String
+  market    String
+  sector    String
+  segment   String
+  currency  String   @default("BRL")
+  price     Float
+  source    String   @default("local")
+  payload   Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model UserPortfolio {
-  id            String   @id @default(cuid())
-  userId        String
-  ticker        String
-  quantity      Float
-  averagePrice  Float
-  broker        String?
-  purchaseDate  DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id           String    @id @default(cuid())
+  userId       String
+  ticker       String
+  quantity     Float
+  averagePrice Float
+  broker       String?
+  purchaseDate DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 }
 
 model FavoriteAsset {
@@ -56,23 +56,23 @@ model AlertRule {
 }
 
 model AppUser {
-  id           String   @id @default(cuid())
+  id           String    @id @default(cuid())
   role         String
-  username     String   @unique
-  email        String   @unique
+  username     String    @unique
+  email        String    @unique
   name         String
   phone        String?
   passwordHash String
   planId       String?
   planValue    Float?
-  status       String   @default("ativo")
+  status       String    @default("ativo")
   dueDate      DateTime?
   notes        String?
   permissions  Json
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  payments     Payment[]
+  payments Payment[]
 }
 
 model AccessPlan {
@@ -103,4 +103,109 @@ model PersistentAppState {
   key       String   @id
   value     Json
   updatedAt DateTime @updatedAt
+}
+
+model AppSession {
+  id         String   @id @default(cuid())
+  tokenHash  String   @unique
+  userId     String
+  userAgent  String?
+  ipHash     String?
+  expiresAt  DateTime
+  lastUsedAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model OnlinePayment {
+  id                    String    @id
+  userId                String
+  planId                String
+  subscriptionId        String?
+  provider              String
+  providerPaymentId     String?
+  providerCheckoutId    String?
+  providerEventId       String?
+  method                String
+  originalAmountInCents Int
+  discountInCents       Int       @default(0)
+  amountInCents         Int
+  currency              String    @default("BRL")
+  status                String    @default("pending")
+  pixQrCode             String?
+  pixQrCodeBase64       String?
+  pixCopyPaste          String?
+  pixTicketUrl          String?
+  pixExpiresAt          DateTime?
+  cardBrand             String?
+  cardLastFour          String?
+  installments          Int?
+  paidAt                DateTime?
+  expiresAt             DateTime?
+  refundedAmountInCents Int       @default(0)
+  idempotencyKey        String    @unique
+  renewalMode           String    @default("extend")
+  providerPayload       Json?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([provider, providerPaymentId])
+  @@index([status])
+}
+
+model OnlineSubscription {
+  id                     String    @id
+  userId                 String    @unique
+  planId                 String
+  provider               String
+  providerSubscriptionId String?
+  paymentMethod          String
+  planName               String
+  planPriceInCents       Int
+  durationDays           Int
+  status                 String    @default("pending")
+  startedAt              DateTime?
+  expiresAt              DateTime?
+  nextBillingAt          DateTime?
+  cancelledAt            DateTime?
+  autoRenew              Boolean   @default(false)
+  cardBrand              String?
+  cardLastFour           String?
+  graceUntil             DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  @@index([provider, providerSubscriptionId])
+  @@index([status])
+}
+
+model PaymentWebhookEvent {
+  id              String    @id @default(cuid())
+  provider        String
+  providerEventId String
+  eventType       String
+  resourceId      String?
+  payloadHash     String
+  processedAt     DateTime?
+  status          String    @default("received")
+  createdAt       DateTime  @default(now())
+
+  @@unique([provider, providerEventId])
+}
+
+model PaymentAuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  actorId   String?
+  action    String
+  entityId  String?
+  details   Json?
+  risk      String   @default("medium")
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([action])
 }

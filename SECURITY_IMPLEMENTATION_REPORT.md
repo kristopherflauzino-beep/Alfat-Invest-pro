@@ -1,22 +1,31 @@
-# Relatorio De Implementacao De Seguranca
+# Relatorio de Implementacao de Seguranca
 
 ## Implementado
 
-- Headers de seguranca globais e cache privado nas APIs.
-- Protecao basica contra CSRF por validacao de origem em alteracao do estado persistente.
-- Limite de tamanho de payload em `PUT /api/app-state`.
-- Senhas novas com minimo de 12 caracteres.
-- Historico/auditoria para reajustes de planos.
-- Preservacao de pagamentos antigos ao alterar valor oficial do plano.
-- Documentos `SECURITY.md`, `SECURITY_CHECKLIST.md` e `INCIDENT_RESPONSE.md`.
+- Sessao em cookie `httpOnly`, `Secure` em producao e `SameSite=Lax`.
+- Sessao opaca e revogavel em PostgreSQL; fallback assinado apenas para manter o ambiente Blob atual acessivel.
+- Senhas bcrypt com custo 12; hashes SHA-256 legados sao aceitos para preservar contas existentes e migrados no login.
+- Cadastro e troca de senha executados no servidor, com politica minima de 12 caracteres.
+- Hashes, tokens de sessao, credenciais de gateway e payloads sensiveis nao sao retornados ao navegador.
+- Rotas de pagamento validam sessao, propriedade, perfil administrativo, origem e Zod.
+- Valores financeiros em centavos e valor oficial consultado no estado persistente do servidor.
+- Cartao processado apenas no checkout hospedado do Mercado Pago; PAN e CVV nunca entram na aplicacao.
+- Webhook HMAC, consulta do recurso no gateway, idempotencia e ativacao transacional do plano.
+- Estorno administrativo exige senha atual e gera auditoria.
+- Headers de seguranca, cache privado e `no-store` nas APIs.
+- Migracao Prisma para sessoes, pagamentos, assinaturas, webhooks e auditoria.
 
-## Nao Implementado Integralmente Nesta Rodada
+## Pendencias Operacionais
 
-- MFA TOTP obrigatorio para administradores.
-- Sessao opaca em cookie `httpOnly` com revogacao.
-- Argon2id/bcrypt no backend.
-- Rotas administrativas separadas com RBAC no servidor.
-- Rate limiting distribuido.
-- Banco relacional normalizado para todos os dominios.
+| Pendencia | Risco | Acao |
+|---|---:|---|
+| Configurar PostgreSQL e executar `npm run db:migrate` | Alto | Necessario antes de habilitar pagamentos. |
+| Cadastrar secrets do Mercado Pago e webhook na Vercel | Alto | Checkout permanece desativado ate a configuracao. |
+| Ativar MFA TOTP obrigatorio para administradores | Alto | Ainda nao implementado. |
+| Rate limiting distribuido | Medio | Configurar Vercel Firewall/KV; o login possui limite local por instancia. |
+| Agendar conciliacao e testar cobrancas sandbox | Alto | Configurar Cron e executar validacao com conta Mercado Pago. |
+| E-mail transacional | Medio | O painel notifica estados; envio por e-mail depende de provedor SMTP/transacional. |
+| Backups e restauracao testada | Alto | Configurar no provedor PostgreSQL. |
+| Alerta moderado de PostCSS reportado pelo `npm audit` no pacote interno do Next.js | Medio | Acompanhar a atualizacao oficial do Next.js; o `npm audit fix --force` sugere uma mudanca incompativel e nao foi aplicado. |
 
-Essas pendencias foram marcadas como risco alto/medio no checklist porque exigem migracao estrutural de autenticacao e modelo de dados. O app foi preservado funcionalmente para nao quebrar login, clientes existentes e acesso cross-device ja sustentado por Vercel Blob/Postgres.
+A arquitetura aplica varias camadas de protecao e reducao continua de riscos. Nao existe seguranca absoluta.

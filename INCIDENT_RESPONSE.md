@@ -1,26 +1,21 @@
-# Plano De Resposta A Incidentes
+# Plano de Resposta a Incidentes
 
-## Fluxo
+1. Detectar e gerar um identificador do incidente.
+2. Confirmar o impacto em contas, pagamentos, dados e secrets.
+3. Conter: bloquear conta/origem, pausar checkout e restringir firewall.
+4. Preservar evidencias sem registrar senhas, cookies, PAN, CVV ou tokens completos.
+5. Revogar sessoes e rotacionar `SESSION_SECRET`, banco e credenciais do gateway.
+6. Reconciliar pagamentos diretamente com o Mercado Pago.
+7. Corrigir, validar em Preview isolado e restaurar backup testado quando necessario.
+8. Comunicar responsaveis e usuarios conforme impacto e obrigacoes legais.
+9. Documentar causa raiz e controles adicionais.
 
-1. Detectar evento suspeito por logs, alertas, Vercel, GitHub ou relato de usuario.
-2. Confirmar impacto: contas, pagamentos, carteiras, relatorios, APIs ou secrets.
-3. Conter: bloquear usuario/origem, desativar chave, pausar endpoint ou restringir firewall.
-4. Preservar evidencias: horario, IP, user-agent, request id, usuario afetado e acao.
-5. Revogar sessoes quando houver suspeita de conta comprometida.
-6. Rotacionar chaves e variaveis sensiveis na Vercel.
-7. Corrigir vulnerabilidade e validar em Preview.
-8. Restaurar dados a partir de backup testado, se necessario.
-9. Comunicar responsaveis e usuarios afetados conforme impacto.
-10. Documentar causa raiz, impacto, correcao e controles adicionais.
+## Casos prioritarios
 
-## Procedimentos Especificos
+- Admin comprometido: revogar sessoes, trocar senha/secrets, revisar estornos, planos e auditoria.
+- Chave Mercado Pago exposta: revogar no provedor, pausar checkout, substituir variavel e revisar webhooks.
+- Alteracao financeira indevida: bloquear estornos, conciliar transacoes e preservar pagamentos originais.
+- Webhook abusado: trocar segredo, bloquear origem, revisar `PaymentWebhookEvent` e reprocessar eventos validos.
+- Banco comprometido: isolar, rotacionar credenciais, restaurar e invalidar todas as sessoes.
 
-- Admin comprometido: bloquear acesso, rotacionar secrets, revisar alteracoes financeiras e exigir nova senha/MFA.
-- Vazamento de chave: revogar chave, criar nova variavel sensivel na Vercel e auditar logs.
-- Vazamento de banco: isolar banco, trocar credenciais, restaurar backup limpo e comunicar responsaveis.
-- Abuso de API: aplicar rate limit/firewall, revisar origem e reduzir payloads expostos.
-- Alteracao financeira indevida: congelar renovacoes, auditar `planPriceHistory`, pagamentos e restaurar valores corretos.
-
-## Acao Emergencial
-
-Enquanto o backend de sessoes opacas nao for implementado, a acao emergencial operacional e bloquear clientes/admin afetados, trocar senha e limpar sessoes locais dos dispositivos envolvidos. A etapa seguinte recomendada e criar rota administrativa para "Encerrar todas as sessoes".
+A acao emergencial de encerramento global pode ser executada removendo as sessoes `AppSession` no banco e rotacionando `SESSION_SECRET` para invalidar o fallback assinado.
