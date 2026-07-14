@@ -33,6 +33,7 @@ import {
   Settings,
   ShieldCheck,
   Star,
+  Target,
   Sun,
   Trash2,
   TrendingDown,
@@ -52,7 +53,6 @@ import {
   CartesianGrid,
   Cell,
   ComposedChart,
-  Legend,
   Line,
   Pie,
   PieChart,
@@ -120,13 +120,14 @@ import {
 import { AlfatecCryptoSection } from "@/components/crypto/AlfatecCryptoSection";
 import { CryptoComparison, CryptoMiniSummary, CryptoOpportunityTable, filterCryptoAnalyses } from "@/components/crypto/CryptoAnalysisTables";
 import { CryptoOpportunityFilters, defaultCryptoOpportunityFilters, type CryptoOpportunityFilterState } from "@/components/crypto/CryptoOpportunityFilters";
-import { ClientPaymentCheckout } from "@/components/payments/ClientPaymentCheckout";
-import { AdminPaymentsPanel } from "@/components/payments/AdminPaymentsPanel";
+import { MercadoPagoLinkCheckout } from "@/components/subscriptions/MercadoPagoLinkCheckout";
+import { AdminSubscriptionRequests } from "@/components/subscriptions/AdminSubscriptionRequests";
+import { AlfatecPortfolioMethod } from "@/components/portfolio/AlfatecPortfolioMethod";
 
 type Role = "ADMIN" | "CLIENTE";
 type ClientStatus = "ativo" | "pendente" | "bloqueado" | "vencido";
 type PaymentStatus = "pago" | "pendente" | "vencido" | "cancelado";
-type ClientModuleId = "dashboard" | "mercado" | "oportunidades" | "comparador" | "carteira" | "radar" | "relatorios" | "graham_valuation" | "alfatec_fiis" | "alfatec_crypto_method" | "plano" | "configuracoes";
+type ClientModuleId = "dashboard" | "mercado" | "oportunidades" | "comparador" | "carteira" | "alfatec_portfolio_method" | "radar" | "relatorios" | "graham_valuation" | "alfatec_fiis" | "alfatec_crypto_method" | "plano" | "configuracoes";
 type AdminModuleId = "admin-dashboard" | "clientes" | "planos" | "financeiro" | "admin-relatorios" | "configuracoes";
 type RangeId = "1D" | "5D" | "1M" | "6M" | "1A" | "5A" | "MAX";
 
@@ -213,8 +214,6 @@ type PlanPriceHistory = {
 
 type AuditLog = { id: string; action: string; userId: string; userName: string; details: string; createdAt: string; risk: "baixo" | "medio" | "alto" };
 
-type PaymentSettings = { provider: "mercado_pago"; pixDiscountPercent: number; pixExpirationMinutes: number; cardInstallments: number; annualInstallmentsEnabled: boolean; gracePeriodDays: number; renewalMode: "today" | "extend"; testMode: boolean };
-
 type AppStatePayload = {
   accounts: Account[];
   plans: Plan[];
@@ -224,17 +223,17 @@ type AppStatePayload = {
   grahamSettings: GrahamSettings;
   fiiSettings: AlfatecFiiSettings;
   cryptoSettings: CryptoSettings;
-  paymentSettings: PaymentSettings;
   auditLogs: AuditLog[];
 };
 
-const allClientModules: ClientModuleId[] = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "radar", "relatorios", "graham_valuation", "alfatec_fiis", "alfatec_crypto_method", "plano", "configuracoes"];
+const allClientModules: ClientModuleId[] = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "alfatec_portfolio_method", "radar", "relatorios", "graham_valuation", "alfatec_fiis", "alfatec_crypto_method", "plano", "configuracoes"];
 const clientModules: Array<{ id: ClientModuleId; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: "dashboard", label: "Dashboard", icon: Gauge },
   { id: "mercado", label: "Mercado", icon: BarChart3 },
   { id: "oportunidades", label: "Oportunidades", icon: TrendingUp },
   { id: "comparador", label: "Comparador", icon: LineChartIcon },
   { id: "carteira", label: "Minha Carteira", icon: WalletCards },
+  { id: "alfatec_portfolio_method", label: "Análise e Balanceamento", icon: Target },
   { id: "radar", label: "Radar IA", icon: BrainCircuit },
   { id: "relatorios", label: "Relatórios", icon: FileSpreadsheet },
   { id: "graham_valuation", label: "Valuation Graham", icon: Calculator },
@@ -267,14 +266,7 @@ const defaultPlans: Plan[] = [
   { id: "mensal", name: "Mensal", value: suggestedPlanValues.mensal, durationDays: 30, status: "ativo", permissions: allClientModules },
   { id: "anual", name: "Anual", value: suggestedPlanValues.anual, durationDays: 365, status: "ativo", permissions: allClientModules }
 ];
-const defaultPaymentSettings: PaymentSettings = { provider: "mercado_pago", pixDiscountPercent: 0, pixExpirationMinutes: 30, cardInstallments: 12, annualInstallmentsEnabled: true, gracePeriodDays: 3, renewalMode: "extend", testMode: true };
-
-const starterPortfolio: PortfolioPosition[] = [
-  { id: "p1", ticker: "GARE11", quantity: 120, averagePrice: 9.35, broker: "Rico", purchaseDate: "2026-02-10" },
-  { id: "p2", ticker: "BBAS3", quantity: 80, averagePrice: 25.9, broker: "XP", purchaseDate: "2025-09-18" },
-  { id: "p3", ticker: "HGLG11", quantity: 8, averagePrice: 154.3, broker: "BTG", purchaseDate: "2025-12-04" },
-  { id: "p4", ticker: "IVVB11", quantity: 6, averagePrice: 322.5, broker: "Clear", purchaseDate: "2026-01-22" }
-];
+const starterPortfolio: PortfolioPosition[] = [];
 const money = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 const compactMoney = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL", notation: "compact", maximumFractionDigits: 1 });
 const number = new Intl.NumberFormat("pt-BR");
@@ -384,10 +376,6 @@ function normalizeFiiSettings(settings?: Partial<AlfatecFiiSettings>): AlfatecFi
   return normalizeAlfatecFiiSettings(settings);
 }
 
-function normalizePaymentSettings(settings?: Partial<PaymentSettings>): PaymentSettings {
-  return { ...defaultPaymentSettings, ...(settings ?? {}) };
-}
-
 function mergeById<T extends { id: string }>(server: T[], local: T[]) {
   const map = new Map<string, T>();
   server.forEach((item) => map.set(item.id, item));
@@ -425,7 +413,6 @@ function mergeAppState(server: Partial<AppStatePayload>, local: AppStatePayload)
     grahamSettings: normalizeGrahamSettings(server.grahamSettings ?? local.grahamSettings),
     fiiSettings: normalizeFiiSettings(server.fiiSettings ?? local.fiiSettings),
     cryptoSettings: normalizeCryptoSettings(server.cryptoSettings ?? local.cryptoSettings),
-    paymentSettings: normalizePaymentSettings(server.paymentSettings ?? local.paymentSettings),
     auditLogs: mergeById(server.auditLogs ?? [], local.auditLogs)
   };
 }
@@ -439,7 +426,6 @@ function statesDiffer(a: AppStatePayload, b: Partial<AppStatePayload>) {
     JSON.stringify(a.grahamSettings) !== JSON.stringify(b.grahamSettings ?? defaultGrahamSettings) ||
     JSON.stringify(a.fiiSettings) !== JSON.stringify(b.fiiSettings ?? defaultAlfatecFiiSettings) ||
     JSON.stringify(a.cryptoSettings) !== JSON.stringify(b.cryptoSettings ?? defaultCryptoSettings) ||
-    JSON.stringify(a.paymentSettings) !== JSON.stringify(b.paymentSettings ?? defaultPaymentSettings) ||
     JSON.stringify(a.auditLogs) !== JSON.stringify(b.auditLogs ?? []);
 }
 
@@ -654,7 +640,6 @@ export default function AlfatecInvestPro() {
   const [grahamSettings, setGrahamSettings] = useState<GrahamSettings>(defaultGrahamSettings);
   const [fiiSettings, setFiiSettings] = useState<AlfatecFiiSettings>(defaultAlfatecFiiSettings);
   const [cryptoSettings, setCryptoSettings] = useState<CryptoSettings>(defaultCryptoSettings);
-  const [paymentSettings, setPaymentSettings] = useState<PaymentSettings>(defaultPaymentSettings);
   const [cryptoSnapshots, setCryptoSnapshots] = useState<Record<string, CryptoMarketSnapshot>>({});
   const [cryptoTicker, setCryptoTicker] = useState("BTC");
   const [cryptoLoading, setCryptoLoading] = useState(false);
@@ -747,7 +732,7 @@ export default function AlfatecInvestPro() {
   ], []);
 
   function currentSnapshot(): AppStatePayload {
-    return { accounts, plans, payments, portfolio, planPriceHistory, grahamSettings, fiiSettings, cryptoSettings, paymentSettings, auditLogs };
+    return { accounts, plans, payments, portfolio, planPriceHistory, grahamSettings, fiiSettings, cryptoSettings, auditLogs };
   }
 
   function localSnapshot(): AppStatePayload {
@@ -760,7 +745,6 @@ export default function AlfatecInvestPro() {
       grahamSettings: normalizeGrahamSettings(safeParse<Partial<GrahamSettings>>(window.localStorage.getItem("alfatec-graham-settings"), defaultGrahamSettings)),
       fiiSettings: normalizeFiiSettings(safeParse<Partial<AlfatecFiiSettings>>(window.localStorage.getItem("alfatec-fii-settings"), defaultAlfatecFiiSettings)),
       cryptoSettings: normalizeCryptoSettings(safeParse<Partial<CryptoSettings>>(window.localStorage.getItem("alfatec-crypto-settings"), defaultCryptoSettings)),
-      paymentSettings: normalizePaymentSettings(safeParse<Partial<PaymentSettings>>(window.localStorage.getItem("alfatec-payment-settings"), defaultPaymentSettings)),
       auditLogs: safeParse<AuditLog[]>(window.localStorage.getItem("alfatec-audit-logs"), [])
     };
   }
@@ -794,7 +778,6 @@ export default function AlfatecInvestPro() {
     setGrahamSettings(merged.grahamSettings);
     setFiiSettings(merged.fiiSettings);
     setCryptoSettings(merged.cryptoSettings);
-    setPaymentSettings(merged.paymentSettings);
     setAuditLogs(merged.auditLogs);
     setStateLoaded(true);
     setDatabaseError("");
@@ -821,8 +804,7 @@ export default function AlfatecInvestPro() {
         setGrahamSettings(merged.grahamSettings);
         setFiiSettings(merged.fiiSettings);
         setCryptoSettings(merged.cryptoSettings);
-        setPaymentSettings(merged.paymentSettings);
-        setAuditLogs(merged.auditLogs);
+            setAuditLogs(merged.auditLogs);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Banco de dados indisponivel.";
         console.error("Banco de dados indisponivel", error);
@@ -836,7 +818,6 @@ export default function AlfatecInvestPro() {
         setGrahamSettings(localState.grahamSettings);
         setFiiSettings(localState.fiiSettings);
         setCryptoSettings(localState.cryptoSettings);
-        setPaymentSettings(localState.paymentSettings);
         setAuditLogs([]);
         setDatabaseError(message);
         setStateLoaded(true);
@@ -849,12 +830,12 @@ export default function AlfatecInvestPro() {
 
   useEffect(() => {
     if (!stateLoaded || !sessionId) return;
-    const snapshot: AppStatePayload = { accounts, plans, payments, portfolio, planPriceHistory, grahamSettings, fiiSettings, cryptoSettings, paymentSettings, auditLogs };
+    const snapshot: AppStatePayload = { accounts, plans, payments, portfolio, planPriceHistory, grahamSettings, fiiSettings, cryptoSettings, auditLogs };
     const timeout = window.setTimeout(() => {
       void persistAppState(snapshot).catch((error) => setDatabaseError(error instanceof Error ? error.message : "Erro ao salvar no banco."));
     }, 500);
     return () => window.clearTimeout(timeout);
-  }, [stateLoaded, accounts, plans, payments, portfolio, planPriceHistory, grahamSettings, fiiSettings, cryptoSettings, paymentSettings, auditLogs]);
+  }, [stateLoaded, accounts, plans, payments, portfolio, planPriceHistory, grahamSettings, fiiSettings, cryptoSettings, auditLogs]);
 
   useEffect(() => window.localStorage.setItem("alfatec-theme", darkMode ? "dark" : "light"), [darkMode]);
   useEffect(() => {
@@ -1095,51 +1076,6 @@ export default function AlfatecInvestPro() {
 
 
 
-  function addPayment(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const formData = new FormData(event.currentTarget);
-    const clientId = String(formData.get("clientId") ?? "");
-    const planId = String(formData.get("planId") ?? "");
-    const plan = plans.find((item) => item.id === planId);
-    const client = clients.find((item) => item.id === clientId);
-    if (!client || !plan) return;
-    const dueDate = String(formData.get("dueDate") ?? "") || addDays(plan.durationDays);
-    const payment: Payment = {
-      id: crypto.randomUUID(),
-      clientId,
-      planId,
-      value: Number(formData.get("value") || plan.value),
-      paymentDate: String(formData.get("paymentDate") ?? "") || todayIso(),
-      dueDate,
-      status: String(formData.get("status") ?? "pago") as PaymentStatus,
-      planName: plan.name,
-      createdBy: currentUser?.id
-    };
-    setPayments((current) => [payment, ...current]);
-    if (payment.status === "pago") updateClient(clientId, { status: "ativo", planId, planValue: payment.value, planStartedAt: todayIso(), dueDate, permissions: plan.permissions });
-    logAudit("pagamento_registrado", `Pagamento ${payment.status} para ${client.name} no plano ${plan.name}.`, payment.status === "pago" ? "baixo" : "medio");
-    event.currentTarget.reset();
-  }
-
-  function renewClientPlan(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const formData = new FormData(event.currentTarget);
-    const clientId = String(formData.get("clientId") ?? "");
-    const planId = String(formData.get("planId") ?? "");
-    const mode = String(formData.get("renewalMode") ?? "today") as "today" | "extend";
-    const plan = plans.find((item) => item.id === planId);
-    const client = clients.find((item) => item.id === clientId);
-    if (!client || !plan) return;
-    const amount = Number(formData.get("value") || plan.value);
-    const baseDate = mode === "extend" && client.dueDate && !isExpired(client.dueDate) ? client.dueDate : todayIso();
-    const dueDate = addDaysToDate(baseDate, plan.durationDays);
-    const payment: Payment = { id: crypto.randomUUID(), clientId, planId, value: amount, paymentDate: todayIso(), dueDate, status: "pago", planName: plan.name, notes: mode === "extend" ? "Renovação acrescentada ao vencimento atual." : "Renovação a partir da data atual.", createdBy: currentUser?.id, renewalMode: mode };
-    setPayments((current) => [payment, ...current]);
-    updateClient(clientId, { status: "ativo", planId, planValue: amount, planStartedAt: todayIso(), dueDate, permissions: plan.permissions });
-    logAudit("renovacao_plano", `Plano ${plan.name} renovado para ${client.name} até ${dueDate}.`, "medio");
-    event.currentTarget.reset();
-  }
-
   async function changePassword(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -1269,7 +1205,7 @@ export default function AlfatecInvestPro() {
               <MetricCard label="Receita recebida" value={money.format(financial.received)} icon={CircleDollarSign} tone="teal" />
             </div>
             <div className="mt-6 grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-              <PremiumCard title="Receita por status" description="Pagamentos registrados manualmente pelo administrador." icon={BarChart3}>
+              <PremiumCard title="Receita por status" description="Assinaturas confirmadas pelo administrador." icon={BarChart3}>
                 <ChartRevenue payments={payments} />
               </PremiumCard>
               <PremiumCard title="Resumo operacional" description="Situação atual da base de clientes." icon={ShieldCheck}>
@@ -1351,20 +1287,9 @@ export default function AlfatecInvestPro() {
               <MetricCard label="Valores pendentes" value={money.format(financial.pending)} icon={CalendarDays} tone="red" />
             </div>
             <div className="mt-6"><PlanValuesManager plans={plans} history={planPriceHistory} clients={clients} payments={payments} onUpdatePlan={updateOfficialPlan} /></div>
-            <div className="mt-6"><AdminPaymentsPanel clients={clients} settings={paymentSettings} onChange={setPaymentSettings} /></div>
-            <div className="mt-6 grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
-              <PremiumCard title="Registrar pagamento" description="Baixe um pagamento e renove o acesso do cliente." icon={CircleDollarSign}>
-                <form onSubmit={addPayment} className="grid gap-3">
-                  <Select name="clientId" label="Cliente" required>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</Select>
-                  <Select name="planId" label="Plano" required>{plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name}</option>)}</Select>
-                  <Input name="value" type="number" step="0.01" label="Valor" placeholder="149.90" />
-                  <Input name="paymentDate" type="date" label="Data do pagamento" defaultValue={todayIso()} />
-                  <Input name="dueDate" type="date" label="Novo vencimento" />
-                  <Select name="status" label="Status" defaultValue="pago"><option value="pago">Pago</option><option value="pendente">Pendente</option><option value="vencido">Vencido</option><option value="cancelado">Cancelado</option></Select>
-                  <button className="rounded-2xl bg-teal-500 px-4 py-3 font-bold text-white">Registrar pagamento</button>
-                </form>
-              </PremiumCard>
-              <PremiumCard title="Histórico de pagamentos" description="Lista com status, vencimento e valor." icon={FileSpreadsheet}>
+            <div className="mt-6"><AdminSubscriptionRequests /></div>
+            <div className="mt-6">
+              <PremiumCard title="Histórico de pagamentos" description="Registros gerados após a ativação administrativa de uma solicitação." icon={FileSpreadsheet}>
                 <div className="mb-5 h-64"><ChartRevenue payments={payments} /></div>
                 <div className="space-y-2">
                   {payments.map((payment) => {
@@ -1372,11 +1297,10 @@ export default function AlfatecInvestPro() {
                     const plan = plans.find((item) => item.id === payment.planId);
                     return <div key={payment.id} className="grid gap-2 rounded-2xl bg-slate-50 p-3 text-sm dark:bg-white/5 sm:grid-cols-4"><strong>{client?.name ?? "Cliente"}</strong><span>{plan?.name}</span><span>{money.format(payment.value)}</span><StatusPill status={payment.status} /></div>;
                   })}
-                  {payments.length === 0 && <p className="text-sm text-slate-500">Nenhum pagamento registrado.</p>}
+                  {payments.length === 0 && <p className="text-sm text-slate-500">Nenhum pagamento confirmado.</p>}
                 </div>
               </PremiumCard>
             </div>
-            <div className="mt-6"><RenewPlanCard clients={clients} plans={plans} onRenew={renewClientPlan} /></div>
           </Section>
         )}
 
@@ -1522,6 +1446,7 @@ export default function AlfatecInvestPro() {
 
         {clientModule === "alfatec_fiis" && <AlfatecFiiSection assets={assets} selectedAsset={fiiAsset} search={fiiSearch} setSearch={setFiiSearch} setSelectedAsset={setFiiAsset} currentUser={currentUser} settings={fiiSettings} saveSettings={saveFiiSettings} filters={fiiFilters} setFilters={setFiiFilters} segments={fiiSegments} opportunities={fiiOpportunityAnalyses} />}
 
+        {clientModule === "alfatec_portfolio_method" && <AlfatecPortfolioMethod lines={portfolioAnalysis.lines} userId={currentUser.id} />}
         {clientModule === "alfatec_crypto_method" && <AlfatecCryptoSection assets={assets} analyses={cryptoAnalyses} selectedTicker={cryptoTicker} loading={cryptoLoading} error={cryptoError} currentUserRole={currentUser.role} settings={cryptoSettings} onSelect={(ticker) => { setCryptoTicker(ticker); void loadCryptoData([ticker]); }} onRefresh={(ticker) => void loadCryptoData([ticker])} onSaveSettings={saveCryptoSettings} />}
 
         {clientModule === "plano" && <ClientPlanSection user={currentUser} plans={plans} payments={payments} />}
@@ -1937,7 +1862,7 @@ function ClientPlanSection({ user, plans, payments }: { user: Account; plans: Pl
   const days = calcularDiasRestantes(user.dueDate ?? todayIso());
   const status = planVisualStatus(user);
   const alert = planAlertText(user);
-  return <Section title="Plano" subtitle="Assinatura, vencimento, dias restantes e recursos liberados." eyebrow="Meu acesso"><div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]"><PremiumCard title="Plano atual" description="Valor contratado e validade do acesso." icon={WalletCards}><div className="grid gap-3 sm:grid-cols-2"><InfoTile label="Plano" value={plan?.name ?? "Sem plano"} /><InfoTile label="Valor" value={money.format(user.planValue ?? plan?.value ?? 0)} /><InfoTile label="Inicio" value={user.planStartedAt ? new Date(user.planStartedAt).toLocaleDateString("pt-BR") : "-"} /><InfoTile label="Vencimento" value={user.dueDate ? new Date(user.dueDate).toLocaleDateString("pt-BR") : "-"} /><InfoTile label="Duracao" value={`${plan?.durationDays ?? 0} dias`} /><InfoTile label="Dias restantes" value={`${days} dias`} /><InfoTile label="Status" value={status.label} /><InfoTile label="Ultimo pagamento" value={lastPayment ? money.format(lastPayment.value) : "-"} /></div>{alert && <p className="mt-4 rounded-2xl bg-amber-500/10 p-3 text-sm font-bold text-amber-700 dark:text-amber-300">{alert}</p>}<p className="mt-4 rounded-2xl bg-slate-50 p-3 text-sm text-slate-600 dark:bg-white/5 dark:text-slate-300">{status.detail}</p><a href="mailto:admin@alfatec.local" className="mt-4 inline-flex rounded-2xl bg-cyan-500 px-5 py-3 font-bold text-white">Entrar em contato com o administrador</a></PremiumCard><PremiumCard title="Menus liberados" description="Recursos disponiveis conforme plano e permissoes do cliente." icon={ShieldCheck}><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{clientModules.map((module) => <div key={module.id} className={cls("rounded-2xl p-3 text-sm font-bold", user.permissions.includes(module.id) ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "bg-slate-100 text-slate-500 dark:bg-white/5 dark:text-slate-400")}>{user.permissions.includes(module.id) ? "Liberado" : "Bloqueado"} - {module.label}</div>)}</div></PremiumCard></div><div className="mt-6"><h3 className="mb-4 text-xl font-black">Assinar ou renovar plano</h3><ClientPaymentCheckout plans={plans} currentPlanId={user.planId} /></div></Section>;
+  return <Section title="Plano" subtitle="Assinatura, vencimento, dias restantes e recursos liberados." eyebrow="Meu acesso"><div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]"><PremiumCard title="Plano atual" description="Valor contratado e validade do acesso." icon={WalletCards}><div className="grid gap-3 sm:grid-cols-2"><InfoTile label="Plano" value={plan?.name ?? "Sem plano"} /><InfoTile label="Valor" value={money.format(user.planValue ?? plan?.value ?? 0)} /><InfoTile label="Inicio" value={user.planStartedAt ? new Date(user.planStartedAt).toLocaleDateString("pt-BR") : "-"} /><InfoTile label="Vencimento" value={user.dueDate ? new Date(user.dueDate).toLocaleDateString("pt-BR") : "-"} /><InfoTile label="Duracao" value={`${plan?.durationDays ?? 0} dias`} /><InfoTile label="Dias restantes" value={`${days} dias`} /><InfoTile label="Status" value={status.label} /><InfoTile label="Ultimo pagamento" value={lastPayment ? money.format(lastPayment.value) : "-"} /></div>{alert && <p className="mt-4 rounded-2xl bg-amber-500/10 p-3 text-sm font-bold text-amber-700 dark:text-amber-300">{alert}</p>}<p className="mt-4 rounded-2xl bg-slate-50 p-3 text-sm text-slate-600 dark:bg-white/5 dark:text-slate-300">{status.detail}</p><a href="mailto:admin@alfatec.local" className="mt-4 inline-flex rounded-2xl bg-cyan-500 px-5 py-3 font-bold text-white">Entrar em contato com o administrador</a></PremiumCard><PremiumCard title="Menus liberados" description="Recursos disponiveis conforme plano e permissoes do cliente." icon={ShieldCheck}><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{clientModules.map((module) => <div key={module.id} className={cls("rounded-2xl p-3 text-sm font-bold", user.permissions.includes(module.id) ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "bg-slate-100 text-slate-500 dark:bg-white/5 dark:text-slate-400")}>{user.permissions.includes(module.id) ? "Liberado" : "Bloqueado"} - {module.label}</div>)}</div></PremiumCard></div><div className="mt-6"><h3 className="mb-4 text-xl font-black">Assinar ou renovar plano</h3><MercadoPagoLinkCheckout plans={plans} currentPlanId={user.planId} userName={user.name} userEmail={user.email} /></div></Section>;
 }
 
 function PlanPriceEditor({ plan, onUpdatePlan }: { plan: Plan; onUpdatePlan: (planId: string, patch: Partial<Plan>, notes?: string) => void }) {
@@ -1953,12 +1878,6 @@ function PlanValuesManager({ plans, history, clients, payments, onUpdatePlan }: 
   const monthlyForecast = clients.filter((client) => client.status === "ativo").reduce((sum, client) => sum + (client.planValue ?? plans.find((plan) => plan.id === client.planId)?.value ?? 0), 0);
   const expiringSeven = clients.filter((client) => calcularDiasRestantes(client.dueDate ?? todayIso()) <= 7 && !isExpired(client.dueDate)).length;
   return <PremiumCard title="Valores dos Planos" description="Fonte única de verdade para novos cadastros, renovações e cobranças." icon={CircleDollarSign}><div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3"><InfoTile label="Valor semanal" value={money.format(plans.find((plan) => plan.id === "semanal")?.value ?? 0)} /><InfoTile label="Valor mensal" value={money.format(plans.find((plan) => plan.id === "mensal")?.value ?? 0)} /><InfoTile label="Valor anual" value={money.format(plans.find((plan) => plan.id === "anual")?.value ?? 0)} /><InfoTile label="Receita mensal prevista" value={money.format(monthlyForecast)} /><InfoTile label="Receita anual prevista" value={money.format(monthlyForecast * 12)} /><InfoTile label="Planos vencendo em 7 dias" value={String(expiringSeven)} /></div><div className="grid gap-4 xl:grid-cols-3">{plans.map((plan) => <PlanPriceEditor key={plan.id} plan={plan} onUpdatePlan={onUpdatePlan} />)}</div><div className="mt-5 rounded-3xl border border-slate-200 p-4 dark:border-white/10"><h4 className="font-black">Histórico de alteração de preço</h4><div className="mt-3 space-y-2">{history.slice(0, 8).map((item) => <div key={item.id} className="grid gap-2 rounded-2xl bg-slate-50 p-3 text-sm dark:bg-white/5 sm:grid-cols-5"><strong>{item.planName}</strong><span>{money.format(item.previousPrice)}</span><span>{money.format(item.newPrice)}</span><span>{item.changedByName}</span><span>{new Date(item.createdAt).toLocaleString("pt-BR")}</span></div>)}{history.length === 0 && <p className="text-sm text-slate-500 dark:text-slate-400">Nenhuma alteração de preço registrada.</p>}</div></div><p className="mt-4 text-xs text-slate-500 dark:text-slate-400">Pagamentos antigos permanecem com o valor registrado na época. Novas cobranças usam o valor vigente do plano.</p></PremiumCard>;
-}
-
-function RenewPlanCard({ clients, plans, onRenew }: { clients: Account[]; plans: Plan[]; onRenew: (event: React.FormEvent<HTMLFormElement>) => void }) {
-  const [selectedPlan, setSelectedPlan] = useState(plans[0]?.id ?? "mensal");
-  const plan = plans.find((item) => item.id === selectedPlan) ?? plans[0];
-  return <PremiumCard title="Renovar plano" description="Registra pagamento e atualiza o vencimento do cliente." icon={RefreshCw}><form onSubmit={onRenew} className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5"><Select name="clientId" label="Cliente" required>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</Select><Select name="planId" label="Plano" value={selectedPlan} onChange={(e) => setSelectedPlan(e.target.value)} required>{plans.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select><Input name="value" type="number" step="0.01" label="Valor" defaultValue={plan?.value ?? 0} /><Select name="renewalMode" label="Regra"><option value="today">A partir da data atual</option><option value="extend">Acrescentar ao vencimento atual</option></Select><button className="self-end rounded-2xl bg-teal-500 px-4 py-3 font-bold text-white">Renovar plano</button></form><p className="mt-3 text-xs text-slate-500 dark:text-slate-400">O valor vigente é copiado para o pagamento/assinatura desta renovação e não muda se o plano for reajustado no futuro.</p></PremiumCard>;
 }
 
 function PasswordRequirementList({ value }: { value: string }) {
@@ -2062,7 +1981,7 @@ function ChartRevenue({ payments }: { payments: Payment[] }) {
   return <ResponsiveContainer width="100%" height="100%"><BarChart data={data}><CartesianGrid strokeDasharray="3 3" opacity={0.18} /><XAxis dataKey="status" /><YAxis tickFormatter={(value) => compactMoney.format(Number(value))} /><Tooltip formatter={(value) => money.format(Number(value))} /><Bar dataKey="valor" name="Valor" radius={[12, 12, 0, 0]} fill="#06b6d4" /></BarChart></ResponsiveContainer>;
 }
 function PieBlock({ data }: { data: Array<{ name: string; value: number }> }) {
-  return <div className="h-80"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={data} dataKey="value" nameKey="name" innerRadius={65} outerRadius={110} paddingAngle={3}>{data.map((entry, index) => <Cell key={entry.name} fill={palette[index % palette.length]} />)}</Pie><Tooltip formatter={(value) => money.format(Number(value))} /><Legend /></PieChart></ResponsiveContainer></div>;
+  return <div className="h-80"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={data} dataKey="value" nameKey="name" innerRadius={65} outerRadius={110} paddingAngle={3}>{data.map((entry, index) => <Cell key={entry.name} fill={palette[index % palette.length]} />)}</Pie><Tooltip formatter={(value) => money.format(Number(value))} /></PieChart></ResponsiveContainer></div>;
 }
 function SettingsSection({ currentUser, darkMode, setDarkMode, settings, setSettings, changePassword, logout }: { currentUser: Account; darkMode: boolean; setDarkMode: (value: boolean) => void; settings: { currency: string; language: string; autoUpdate: boolean; priceAlerts: boolean; dividendAlerts: boolean }; setSettings: React.Dispatch<React.SetStateAction<{ currency: string; language: string; autoUpdate: boolean; priceAlerts: boolean; dividendAlerts: boolean }>>; changePassword: (event: React.FormEvent<HTMLFormElement>) => void; logout: () => void }) {
   const [newPassword, setNewPassword] = useState("");

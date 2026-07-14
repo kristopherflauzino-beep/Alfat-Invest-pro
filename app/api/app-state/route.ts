@@ -16,11 +16,12 @@ type AppStatePayload = {
   grahamSettings: Record<string, unknown>;
   fiiSettings: Record<string, unknown>;
   cryptoSettings: Record<string, unknown>;
-  paymentSettings: Record<string, unknown>;
+  subscriptionRequests: unknown[];
+  portfolioProfiles: unknown[];
   auditLogs: unknown[];
 };
 
-const allClientModules = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "radar", "relatorios", "graham_valuation", "alfatec_fiis", "alfatec_crypto_method", "plano", "configuracoes"];
+const allClientModules = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "alfatec_portfolio_method", "radar", "relatorios", "graham_valuation", "alfatec_fiis", "alfatec_crypto_method", "plano", "configuracoes"];
 const appStateBlobPath = process.env.APP_STATE_BLOB_PATH || "alfatec-invest-pro/app-state.json";
 const defaultGrahamSettings = { defaultY: 5.5, minGrowth: 0, maxGrowth: 20, scoreWeight: 10, enabled: true, clientsCanEditGrowth: true, clientsCanEditY: false };
 const defaultFiiWeights = { qualidade: 20, renda: 18, risco: 16, valuation: 14, gestao: 12, liquidez: 6, diversificacao: 14 };
@@ -28,8 +29,6 @@ const defaultFiiSettings = { enabled: true, referenceRate: 6.5, referenceRateSou
 const genericCryptoWeights = { fundamentals: 25, network: 20, tokenomics: 15, security: 15, market: 10, development: 5, onChainValuation: 5, risk: 5 };
 const cryptoCategories = ["monetary", "payment", "smart_contract", "infrastructure", "interoperability", "oracle", "defi", "governance", "exchange", "layer_1", "layer_2", "stablecoin", "rwa", "ai", "gaming", "nft", "memecoin", "other"];
 const defaultCryptoSettings = { enabled: true, minimumConfidence: "Baixa", weightsByCategory: Object.fromEntries(cryptoCategories.map((category) => [category, genericCryptoWeights])) };
-const defaultPaymentSettings = { provider: "mercado_pago", pixDiscountPercent: 0, pixExpirationMinutes: 30, cardInstallments: 12, annualInstallmentsEnabled: true, gracePeriodDays: 3, renewalMode: "extend", testMode: true };
-
 
 const defaultState: AppStatePayload = {
   accounts: [
@@ -56,7 +55,8 @@ const defaultState: AppStatePayload = {
   grahamSettings: defaultGrahamSettings,
   fiiSettings: defaultFiiSettings,
   cryptoSettings: defaultCryptoSettings,
-  paymentSettings: defaultPaymentSettings,
+  subscriptionRequests: [],
+  portfolioProfiles: [],
   auditLogs: []
 };
 
@@ -111,7 +111,8 @@ function normalizeState(value: unknown): AppStatePayload {
     grahamSettings: input.grahamSettings && typeof input.grahamSettings === "object" ? { ...defaultGrahamSettings, ...input.grahamSettings } : defaultGrahamSettings,
     fiiSettings: input.fiiSettings && typeof input.fiiSettings === "object" ? { ...defaultFiiSettings, ...input.fiiSettings } : defaultFiiSettings,
     cryptoSettings: input.cryptoSettings && typeof input.cryptoSettings === "object" ? { ...defaultCryptoSettings, ...input.cryptoSettings } : defaultCryptoSettings,
-    paymentSettings: input.paymentSettings && typeof input.paymentSettings === "object" ? { ...defaultPaymentSettings, ...input.paymentSettings } : defaultPaymentSettings,
+    subscriptionRequests: Array.isArray(input.subscriptionRequests) ? input.subscriptionRequests : [],
+    portfolioProfiles: Array.isArray(input.portfolioProfiles) ? input.portfolioProfiles : [],
     auditLogs: Array.isArray(input.auditLogs) ? input.auditLogs : []
   };
 }
@@ -233,36 +234,43 @@ export async function GET(request: Request) {
     const current = state.accounts.find((item) => stringField(item, "id") === userId?.toLowerCase());
     const role = current && typeof current === "object" ? String((current as Record<string, unknown>).role ?? "") : "";
     const withoutHashes = (items: unknown[]) => items.map((item) => item && typeof item === "object" ? { ...(item as Record<string, unknown>), passwordHash: "" } : item);
+    const ownPortfolio = userId ? state.portfolio.filter((item) => {
+      const owner = stringField(item, "userId");
+      return owner === userId.toLowerCase() || (role === "ADMIN" && !owner);
+    }).map((item) => item && typeof item === "object" ? Object.fromEntries(Object.entries(item as Record<string, unknown>).filter(([key]) => key !== "userId")) : item) : [];
+    const internalFreeState = { ...state, subscriptionRequests: [], portfolioProfiles: [] };
     const safeState = !userId
-      ? { ...state, accounts: [], payments: [], portfolio: [], planPriceHistory: [], auditLogs: [] }
+      ? { ...internalFreeState, accounts: [], payments: [], portfolio: [], planPriceHistory: [], auditLogs: [] }
       : role === "ADMIN"
-        ? { ...state, accounts: withoutHashes(state.accounts) }
-        : { ...state, accounts: withoutHashes(current ? [current] : []), payments: state.payments.filter((item) => stringField(item, "clientId") === userId.toLowerCase()), planPriceHistory: [], auditLogs: [] };
+        ? { ...internalFreeState, accounts: withoutHashes(state.accounts), portfolio: ownPortfolio }
+        : { ...internalFreeState, accounts: withoutHashes(current ? [current] : []), payments: state.payments.filter((item) => stringField(item, "clientId") === userId.toLowerCase()), portfolio: ownPortfolio, planPriceHistory: [], auditLogs: [] };
     const response = NextResponse.json(safeState);
     response.headers.set("x-alfatec-storage", storageProvider());
     return response;
   } catch (error) {
     console.error("Erro ao carregar estado persistente", error);
-    return NextResponse.json({ error: "N?o foi poss?vel carregar os dados do banco permanente." }, { status: 500 });
+    return NextResponse.json({ error: "Não foi possível carregar os dados do banco permanente." }, { status: 500 });
   }
 }
 
 export async function PUT(request: Request) {
   if (storageProvider() === "not-configured") return storageNotConfiguredResponse();
-  if (!requestOriginAllowed(request)) return NextResponse.json({ error: "Origem da solicita??o n?o autorizada." }, { status: 403 });
-  if (requestTooLarge(request)) return NextResponse.json({ error: "Solicita??o muito grande." }, { status: 413 });
+  if (!requestOriginAllowed(request)) return NextResponse.json({ error: "Origem da solicitação não autorizada." }, { status: 403 });
+  if (requestTooLarge(request)) return NextResponse.json({ error: "Solicitação muito grande." }, { status: 413 });
   const userId = await sessionUserId(request);
-  if (!userId) return NextResponse.json({ error: "Sess?o inv?lida ou expirada." }, { status: 401 });
+  if (!userId) return NextResponse.json({ error: "Sessão inválida ou expirada." }, { status: 401 });
   try {
     const current = await readState();
     const actor = current.accounts.find((item) => stringField(item, "id") === userId.toLowerCase());
-    if (!actor || typeof actor !== "object") return NextResponse.json({ error: "Sess?o inv?lida." }, { status: 401 });
+    if (!actor || typeof actor !== "object") return NextResponse.json({ error: "Sessão inválida." }, { status: 401 });
     const role = String((actor as Record<string, unknown>).role ?? "");
     const incoming = normalizeState(await request.json());
     let body: AppStatePayload;
     if (role === "ADMIN") {
       const currentById = new Map(current.accounts.map((item) => [stringField(item, "id"), item]));
-      body = { ...incoming, accounts: incoming.accounts.filter((item) => currentById.has(stringField(item, "id"))).map((item) => item && typeof item === "object" ? { ...(item as Record<string, unknown>), passwordHash: String((currentById.get(stringField(item, "id")) as Record<string, unknown> | undefined)?.passwordHash ?? "") } : item) };
+      const otherPortfolios = current.portfolio.filter((item) => { const owner = stringField(item, "userId"); return owner && owner !== userId.toLowerCase(); });
+      const ownPortfolio = incoming.portfolio.map((item) => item && typeof item === "object" ? { ...(item as Record<string, unknown>), userId } : item);
+      body = { ...incoming, accounts: incoming.accounts.filter((item) => currentById.has(stringField(item, "id"))).map((item) => item && typeof item === "object" ? { ...(item as Record<string, unknown>), passwordHash: String((currentById.get(stringField(item, "id")) as Record<string, unknown> | undefined)?.passwordHash ?? "") } : item), portfolio: [...otherPortfolios, ...ownPortfolio], subscriptionRequests: current.subscriptionRequests, portfolioProfiles: current.portfolioProfiles };
     } else {
       const requestedAccount = incoming.accounts.find((item) => stringField(item, "id") === userId.toLowerCase());
       const accounts = current.accounts.map((item) => {
@@ -271,7 +279,9 @@ export async function PUT(request: Request) {
         const existing = item as Record<string, unknown>;
         return { ...existing, name: safe.name ?? existing.name, email: safe.email ?? existing.email, phone: safe.phone ?? existing.phone, passwordHash: String(safe.passwordHash ?? "") || existing.passwordHash };
       });
-      body = { ...current, accounts, portfolio: incoming.portfolio };
+      const otherPortfolios = current.portfolio.filter((item) => stringField(item, "userId") !== userId.toLowerCase());
+      const ownPortfolio = incoming.portfolio.map((item) => item && typeof item === "object" ? { ...(item as Record<string, unknown>), userId } : item);
+      body = { ...current, accounts, portfolio: [...otherPortfolios, ...ownPortfolio] };
     }
     await writeState(body);
     if (role === "ADMIN") {
@@ -284,6 +294,6 @@ export async function PUT(request: Request) {
     return NextResponse.json({ ok: true, provider: storageProvider(), updatedAt: new Date().toISOString() });
   } catch (error) {
     console.error("Erro ao salvar estado persistente", error);
-    return NextResponse.json({ error: "N?o foi poss?vel salvar os dados no banco permanente." }, { status: 500 });
+    return NextResponse.json({ error: "Não foi possível salvar os dados no banco permanente." }, { status: 500 });
   }
 }

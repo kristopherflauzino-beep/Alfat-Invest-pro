@@ -1,6 +1,6 @@
 # ALFATEC INVEST PRO
 
-Plataforma de analise de investimentos com perfis de administrador e cliente, mercado, carteira, oportunidades, comparador, Radar IA, Valuation Graham, Metodo AlfaTec FIIs, Metodo AlfaTec Cripto, planos e financeiro.
+Plataforma de analise de investimentos com perfis de administrador e cliente, mercado, carteira, oportunidades, comparador, Radar IA, Valuation Graham, Metodos AlfaTec FIIs, Cripto e Carteira, planos e financeiro.
 
 ## Desenvolvimento
 
@@ -21,57 +21,22 @@ npm run build
 
 ## Persistencia
 
-O estado operacional existente pode ser lido do Vercel Blob. Pagamentos online exigem PostgreSQL e usam as tabelas definidas em `prisma/schema.prisma`.
-
-```powershell
-npm run db:migrate
-```
-
-A migracao copia o estado persistente para PostgreSQL quando `DATABASE_URL` estiver configurada. Clientes existentes nao sao recriados nem apagados.
+O estado operacional usa PostgreSQL quando `DATABASE_URL` esta configurada e pode utilizar o Vercel Blob ja vinculado ao projeto. Contas, carteiras, perfis, planos e solicitacoes de assinatura permanecem compartilhados entre dispositivos.
 
 ## Metodo AlfaTec Cripto
 
 A pagina `/metodo-alfatec-cripto` abre o menu dedicado. O metodo usa dados identificados da CoinGecko, pesos por categoria, oito pilares, confianca, riscos, comparacao, Oportunidades, Comparador, Radar IA e relatorios. Dados ausentes nao sao convertidos em zero.
 
-Variavel opcional para ampliar os limites da fonte:
+## Metodo AlfaTec Carteira
+
+O menu `Analise e Balanceamento` compara a carteira atual com a carteira-alvo. Inclui questionario, Perfil AlfaTec de Carteira, bandas de tolerancia, score, concentracao, reserva de emergencia, renda, simulacao de aportes e historico. Nenhuma ordem de compra ou venda e executada.
+
+## Pagamento pelo link oficial
+
+A unica opcao apresentada ao cliente e `Pagar com Mercado Pago`, que abre em nova aba:
 
 ```text
-COINGECKO_API_KEY
+https://link.mercadopago.com.br/alfatecinvestpro
 ```
 
-## Pagamentos
-
-A integracao inicial usa Mercado Pago por uma camada `PaymentProvider`/`PaymentService`:
-
-- Pix pela Orders API, com QR Code, Copia e Cola, expiracao e conciliacao;
-- cartao em checkout hospedado, sem PAN ou CVV na aplicacao;
-- recorrencia mensal/anual por assinatura autorizada;
-- webhook assinado como fonte oficial de confirmacao;
-- valores em centavos, idempotencia, recibos PDF, estorno com reautenticacao e auditoria;
-- nenhuma liberacao de plano antes da confirmacao valida do provedor.
-
-Use `.env.example` como referencia. Em sandbox, a credencial deve comecar com `TEST-`. Para cobrancas reais, defina `PAYMENT_ENVIRONMENT=production` e use a credencial oficial.
-
-No deploy inicial, configure:
-
-```text
-DATABASE_URL
-SESSION_SECRET
-PAYMENT_PROVIDER=mercado_pago
-PAYMENT_ENVIRONMENT=sandbox|production
-PAYMENT_APP_URL=https://SEU-DOMINIO
-MERCADO_PAGO_ACCESS_TOKEN
-MERCADO_PAGO_WEBHOOK_SECRET
-CRON_SECRET
-ADMIN_BOOTSTRAP_PASSWORD
-```
-
-Cadastre no Mercado Pago o webhook:
-
-```text
-https://SEU-DOMINIO/api/webhooks/payments/mercado-pago
-```
-
-A conciliacao automatizada esta disponivel em `GET /api/cron/payments/reconcile`, protegida por `Authorization: Bearer CRON_SECRET`; agende a chamada na Vercel.
-
-Sem banco, token ou segredo do webhook, o checkout permanece desativado e mostra uma mensagem de configuracao. Nenhuma cobranca ficticia e criada.
+O sistema nao usa credenciais do Mercado Pago, nao cria cobrancas por API e nao confirma pagamentos automaticamente. O clique registra uma solicitacao com status `Aguardando confirmacao`. O cliente pode informar os dados nao sensiveis da transacao, e somente o administrador pode conferir e ativar o plano manualmente.

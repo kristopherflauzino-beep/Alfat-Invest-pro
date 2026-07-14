@@ -3,7 +3,7 @@ import { hasDatabaseUrl, prisma } from "@/lib/prisma";
 
 export type CoreAccount = { id: string; role: "ADMIN" | "CLIENTE"; username: string; email: string; name: string; phone?: string; passwordHash: string; planId?: string; planValue?: number; status: string; dueDate?: string; planStartedAt?: string; permissions: string[]; [key: string]: unknown };
 export type CorePlan = { id: string; name: string; value: number; durationDays: number; status: string; permissions: string[]; [key: string]: unknown };
-export type CoreState = { accounts: CoreAccount[]; plans: CorePlan[]; payments: unknown[]; portfolio: unknown[]; planPriceHistory: unknown[]; grahamSettings: Record<string, unknown>; fiiSettings: Record<string, unknown>; cryptoSettings: Record<string, unknown>; paymentSettings: Record<string, unknown>; auditLogs: unknown[]; [key: string]: unknown };
+export type CoreState = { accounts: CoreAccount[]; plans: CorePlan[]; payments: unknown[]; portfolio: unknown[]; planPriceHistory: unknown[]; grahamSettings: Record<string, unknown>; fiiSettings: Record<string, unknown>; cryptoSettings: Record<string, unknown>; subscriptionRequests?: unknown[]; portfolioProfiles?: unknown[]; auditLogs: Array<Record<string, unknown>>; [key: string]: unknown };
 
 function findEnvBySuffix(suffix: string, validator: (value: string) => boolean = (value) => value.trim() !== "") {
   const direct = process.env[suffix];

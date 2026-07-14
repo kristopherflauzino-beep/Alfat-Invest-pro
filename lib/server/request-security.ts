@@ -7,7 +7,7 @@ export class RequestSecurityError extends Error {
 export function assertSameOrigin(request: Request) {
   const origin = request.headers.get("origin");
   if (!origin) return;
-  const expected = process.env.PAYMENT_APP_URL || process.env.NEXT_PUBLIC_APP_URL || `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL || request.headers.get("host") || ""}`;
+  const expected = process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL || request.headers.get("host") || ""}`;
   try {
     if (new URL(origin).host !== new URL(expected).host) throw new RequestSecurityError(403, "Origem da requisicao nao autorizada.");
   } catch (error) {
