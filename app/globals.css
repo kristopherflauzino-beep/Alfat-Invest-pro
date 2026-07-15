@@ -51,20 +51,6 @@ button {
   box-shadow: 0 18px 60px rgba(15, 23, 42, 0.18) !important;
 }
 
-@media print {
-  header, button, input, select {
-    display: none !important;
-  }
-
-  main {
-    background: white !important;
-    color: black !important;
-  }
-
-  section {
-    break-inside: avoid;
-  }
-}
 
 /* Ajuste de contraste para campos no modo escuro */
 .dark input,
@@ -202,5 +188,59 @@ textarea {
 
   .recharts-cartesian-axis-tick-value {
     font-size: 10px !important;
+  }
+}
+
+.report-document {
+  print-color-adjust: exact;
+  -webkit-print-color-adjust: exact;
+}
+
+.report-section,
+.report-document tr,
+.report-document img,
+.report-document canvas {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.report-document thead {
+  display: table-header-group;
+}
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 12mm;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  .report-document,
+  .report-document * {
+    visibility: visible !important;
+  }
+
+  .report-document {
+    position: absolute !important;
+    inset: 0 auto auto 0 !important;
+    width: 100% !important;
+    max-width: none !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    box-shadow: none !important;
+  }
+
+  .report-document table {
+    width: 100% !important;
+  }
+
+  .report-section {
+    orphans: 3;
+    widows: 3;
   }
 }

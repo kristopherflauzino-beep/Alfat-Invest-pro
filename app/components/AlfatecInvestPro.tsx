@@ -125,6 +125,7 @@ import { AdminSubscriptionRequests } from "@/components/subscriptions/AdminSubsc
 import { AlfatecPortfolioMethod } from "@/components/portfolio/AlfatecPortfolioMethod";
 import { NotificationBell } from "@/components/notifications/NotificationBell";
 import { NotificationCenter } from "@/components/notifications/NotificationCenter";
+import { ReportCenter } from "@/components/reports/ReportCenter";
 
 type Role = "ADMIN" | "CLIENTE";
 type ClientStatus = "ativo" | "pendente" | "bloqueado" | "vencido";
@@ -624,15 +625,7 @@ function isStrongPassword(value: string) {
 function passwordRequirementMessage() {
   return "A senha precisa ter mínimo de 12 caracteres, letras, número e caractere especial.";
 }
-function downloadText(filename: string, content: string, type = "text/plain;charset=utf-8") {
-  const blob = new Blob([content], { type });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  URL.revokeObjectURL(url);
-}
+
 
 export default function AlfatecInvestPro() {
   const [darkMode, setDarkMode] = useState(true);
@@ -844,6 +837,14 @@ export default function AlfatecInvestPro() {
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("menu") as ClientModuleId | null;
     if (requested && allClientModules.includes(requested)) { setClientModule(requested); if (currentUser?.role === "ADMIN") setAdminModule(requested); }
+  }, [currentUser?.role]);
+  useEffect(() => {
+    const openReports = () => {
+      setClientModule("relatorios");
+      if (currentUser?.role === "ADMIN") setAdminModule("relatorios");
+    };
+    window.addEventListener("alfatec:open-reports", openReports);
+    return () => window.removeEventListener("alfatec:open-reports", openReports);
   }, [currentUser?.role]);
   useEffect(() => setGrahamY(grahamSettings.defaultY), [grahamSettings.defaultY]);
   useEffect(() => { extraAssets.filter((asset) => asset.source === "external").forEach((asset) => window.localStorage.setItem("alfatec-quote-" + asset.ticker, JSON.stringify(asset))); }, [extraAssets]);
@@ -1100,74 +1101,6 @@ export default function AlfatecInvestPro() {
     } catch (error) { alert(error instanceof Error ? error.message : "Nao foi possivel alterar a senha."); }
   }
 
-  function exportAdminReport() {
-    const lines = [
-      "ALFATEC INVEST PRO - RELATÓRIO ADMIN",
-      `Clientes cadastrados: ${clients.length}`,
-      `Clientes ativos: ${financial.active}`,
-      `Clientes bloqueados: ${financial.blocked}`,
-      `Clientes vencidos: ${financial.expired}`,
-      `Receita recebida: ${money.format(financial.received)}`,
-      `Valores pendentes: ${money.format(financial.pending)}`,
-      "",
-      "Clientes:",
-      ...clients.map((client) => `${client.name};${client.email};${client.status};${client.planId};${client.dueDate ?? ""}`)
-    ];
-    downloadText("relatorio-admin-alfatec.txt", lines.join("\n"));
-  }
-
-  function exportPortfolioCsv() {
-    const header = "ticker,tipo,quantidade,preco_medio,preco_atual,valor_investido,valor_atual,lucro_prejuizo,rentabilidade,dividendos_ano\n";
-    const rows = portfolioAnalysis.lines.map((line) => [
-      line.ticker,
-      line.asset.type,
-      line.quantity,
-      line.averagePrice.toFixed(2),
-      line.asset.price.toFixed(2),
-      line.invested.toFixed(2),
-      line.currentValue.toFixed(2),
-      line.profit.toFixed(2),
-      line.profitability.toFixed(2),
-      line.estimatedDividendsYear.toFixed(2)
-    ].join(","));
-    downloadText("carteira-alfatec-invest-pro.csv", header + rows.join("\n"), "text/csv;charset=utf-8");
-  }
-
-  function exportFiiReportCsv() {
-    const header = "ticker,nome,segmento,tipo,score,classificacao,confianca,pvp,dy_recorrente,premio_risco,qualidade,renda,risco,valuation,gestao,liquidez,diversificacao\n";
-    const rows = fiiAnalyses.map(({ asset, analysis }) => [
-      asset.ticker,
-      `"${asset.name.replace(/"/g, "'")}"`,
-      `"${asset.segment}"`,
-      `"${analysis.kindLabel}"`,
-      analysis.score ?? "",
-      analysis.classification,
-      analysis.confidence,
-      fiiNumeric(analysis.pvp.value) ?? "",
-      fiiNumeric(analysis.recurrentDividendYield.value) ?? "",
-      fiiNumeric(analysis.riskPremium.value) ?? "",
-      analysis.scores.qualidade ?? "",
-      analysis.scores.renda ?? "",
-      analysis.scores.risco ?? "",
-      analysis.scores.valuation ?? "",
-      analysis.scores.gestao ?? "",
-      analysis.scores.liquidez ?? "",
-      analysis.scores.diversificacao ?? ""
-    ].join(","));
-    downloadText("metodo-alfatec-fiis.csv", header + rows.join("\n"), "text/csv;charset=utf-8");
-  }
-
-
-  function exportCryptoReportCsv() {
-    const header = "ticker,nome,categoria,preco_usd,variacao_24h,market_cap,volume_24h,score,classificacao,confianca,fundamentos,rede,tokenomics,seguranca,mercado,desenvolvimento,valuation_onchain,risco,fonte,atualizacao\n";
-    const rows = cryptoAnalyses.map((analysis) => {
-      const score = (key: string) => analysis.pillars.find((pillar) => pillar.key === key)?.score ?? "";
-      return [analysis.ticker, `"${analysis.name.replace(/"/g, "'")}"`, `"${analysis.categoryLabel}"`, analysis.snapshot.price ?? "", analysis.snapshot.change24h ?? "", analysis.snapshot.marketCap ?? "", analysis.snapshot.volume24h ?? "", analysis.score ?? "", analysis.classification, analysis.confidence, score("fundamentals"), score("network"), score("tokenomics"), score("security"), score("market"), score("development"), score("onChainValuation"), score("risk"), analysis.snapshot.source, analysis.snapshot.updatedAt].join(",");
-    });
-    downloadText("metodo-alfatec-cripto.csv", header + rows.join("\n"), "text/csv;charset=utf-8");
-  }
-
-
   const dashboardCards = [
     { label: "Patrimônio total", value: money.format(portfolioAnalysis.totalEquity), icon: WalletCards, tone: "teal" },
     { label: "Rentabilidade diária", value: pct(portfolioAnalysis.lines.reduce((s, l) => s + l.asset.changeDay * l.weight / 100, 0)), icon: TrendingUp, tone: "green" },
@@ -1312,11 +1245,8 @@ export default function AlfatecInvestPro() {
         )}
 
         {adminModule === "admin-relatorios" && (
-          <Section title="Relatórios Admin" subtitle="Exportação de clientes, planos, status e financeiro." eyebrow="Relatórios">
-            <PremiumCard title="Relatório administrativo" description="Gere um arquivo TXT com o resumo do sistema." icon={Download}>
-              <button onClick={exportAdminReport} className="rounded-2xl bg-slate-950 px-5 py-3 font-bold text-white dark:bg-white dark:text-slate-950"><Download className="mr-2 inline h-4 w-4" />Exportar relatório admin</button>
-              <button onClick={() => window.print()} className="ml-3 rounded-2xl bg-teal-500 px-5 py-3 font-bold text-white">Imprimir / PDF</button>
-            </PremiumCard>
+          <Section title="Relatórios Admin" subtitle="Documentos profissionais de clientes, planos, financeiro, uso e sistema." eyebrow="PDF, Excel, CSV, JSON e PNG">
+            <ReportCenter mode="admin" user={currentUser} accounts={accounts} plans={plans} payments={payments} auditLogs={auditLogs} portfolio={portfolioAnalysis} assets={assets} fiiAnalyses={fiiAnalyses} cryptoAnalyses={cryptoAnalyses} />
           </Section>
         )}
 
@@ -1483,25 +1413,8 @@ export default function AlfatecInvestPro() {
         )}
 
         {clientModule === "relatorios" && (
-          <Section title="Relatórios" subtitle="Resumo profissional com carteira, dividendos, setores, alertas e exportação." eyebrow="PDF, Excel e CSV">
-            <PremiumCard title="Relatório da carteira" description="Exportação CSV e impressão em PDF pelo navegador." icon={FileSpreadsheet}>
-              <div className="grid gap-4 sm:grid-cols-3"><InfoTile label="Patrimônio" value={money.format(portfolioAnalysis.totalEquity)} /><InfoTile label="Lucro/Prejuízo" value={money.format(portfolioAnalysis.totalProfit)} /><InfoTile label="Dividendos/ano" value={money.format(portfolioAnalysis.projectedDividendsYear)} /></div>
-              <div className="mt-5 flex flex-wrap gap-3"><button onClick={exportPortfolioCsv} className="rounded-2xl bg-teal-500 px-5 py-3 font-bold text-white"><Download className="mr-2 inline h-4 w-4" />Exportar CSV</button><button onClick={() => window.print()} className="rounded-2xl bg-slate-950 px-5 py-3 font-bold text-white dark:bg-white dark:text-slate-950">Imprimir / PDF</button></div>
-            </PremiumCard>
-            <div className="mt-6">
-              <PremiumCard title="Relatório de FIIs" description="Score AlfaTec FIIs, classificação, confiança, pontos positivos, riscos, fontes e datas." icon={Building2}>
-                <div className="grid gap-3 sm:grid-cols-3"><InfoTile label="FIIs analisados" value={String(fiiAnalyses.length)} /><InfoTile label="Maior score" value={fiiOpportunityAnalyses[0]?.asset.ticker ?? "-"} /><InfoTile label="Média dos scores" value={fiiAnalyses.filter((item) => item.analysis.score !== null).length ? `${Math.round(fiiAnalyses.reduce((sum, item) => sum + (item.analysis.score ?? 0), 0) / fiiAnalyses.filter((item) => item.analysis.score !== null).length)}/100` : "-"} /></div>
-                <div className="mt-4"><FiiOpportunitiesTable items={fiiOpportunityAnalyses.slice(0, 8)} onSelect={(asset) => { setFiiAsset(asset); setFiiSearch(asset.ticker); setClientModule("alfatec_fiis"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_fiis"); }} /></div>
-                <div className="mt-5 flex flex-wrap gap-3"><button onClick={exportFiiReportCsv} className="rounded-2xl bg-teal-500 px-5 py-3 font-bold text-white"><Download className="mr-2 inline h-4 w-4" />Exportar CSV de FIIs</button><button onClick={() => window.print()} className="rounded-2xl bg-slate-950 px-5 py-3 font-bold text-white dark:bg-white dark:text-slate-950">Imprimir / PDF</button></div>
-              </PremiumCard>
-            <div className="mt-6">
-              <PremiumCard title="Relatorio de criptoativos" description="Score AlfaTec Cripto, pilares, riscos, confianca, fonte e atualizacao." icon={Bitcoin}>
-                <div className="grid gap-3 sm:grid-cols-3"><InfoTile label="Criptoativos analisados" value={String(cryptoAnalyses.length)} /><InfoTile label="Maior score" value={cryptoOpportunityAnalyses[0]?.ticker ?? "-"} /><InfoTile label="Fonte" value="CoinGecko" /></div>
-                <div className="mt-4"><CryptoOpportunityTable items={cryptoAnalyses.filter((item) => item.score !== null).sort((a, b) => (b.score ?? 0) - (a.score ?? 0))} onSelect={(ticker) => { setCryptoTicker(ticker); setClientModule("alfatec_crypto_method"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_crypto_method"); }} /></div>
-                <div className="mt-5 flex flex-wrap gap-3"><button onClick={exportCryptoReportCsv} className="rounded-2xl bg-teal-500 px-5 py-3 font-bold text-white"><Download className="mr-2 inline h-4 w-4" />Exportar CSV de cripto</button><button onClick={() => window.print()} className="rounded-2xl bg-slate-950 px-5 py-3 font-bold text-white dark:bg-white dark:text-slate-950">Imprimir / PDF</button></div>
-              </PremiumCard>
-            </div>
-            </div>
+          <Section title="Relatórios" subtitle="Documentos profissionais da carteira com prévia e exportação multiformato." eyebrow="PDF, Excel, CSV, JSON e PNG">
+            <ReportCenter mode="client" user={currentUser} plans={plans} payments={payments} portfolio={portfolioAnalysis} assets={assets} fiiAnalyses={fiiAnalyses} cryptoAnalyses={cryptoAnalyses} />
           </Section>
         )}
 

@@ -23,6 +23,8 @@ type AppStatePayload = {
   passwordResetTokens: unknown[];
   passwordResetRateEvents: unknown[];
   emailJobs: unknown[];
+  reportExports: unknown[];
+  reportRateEvents: unknown[];
   auditLogs: unknown[];
 };
 
@@ -67,6 +69,8 @@ const defaultState: AppStatePayload = {
   passwordResetTokens: [],
   passwordResetRateEvents: [],
   emailJobs: [],
+  reportExports: [],
+  reportRateEvents: [],
   auditLogs: []
 };
 
@@ -134,6 +138,8 @@ function normalizeState(value: unknown): AppStatePayload {
     passwordResetTokens: Array.isArray(input.passwordResetTokens) ? input.passwordResetTokens : [],
     passwordResetRateEvents: Array.isArray(input.passwordResetRateEvents) ? input.passwordResetRateEvents : [],
     emailJobs: Array.isArray(input.emailJobs) ? input.emailJobs : [],
+    reportExports: Array.isArray(input.reportExports) ? input.reportExports : [],
+    reportRateEvents: Array.isArray(input.reportRateEvents) ? input.reportRateEvents : [],
     auditLogs: Array.isArray(input.auditLogs) ? input.auditLogs : []
   };
 }
@@ -263,7 +269,7 @@ export async function GET(request: Request) {
       const owner = stringField(item, "userId");
       return owner === userId.toLowerCase() || (role === "ADMIN" && !owner);
     }).map((item) => item && typeof item === "object" ? Object.fromEntries(Object.entries(item as Record<string, unknown>).filter(([key]) => key !== "userId")) : item) : [];
-    const internalFreeState = { ...state, subscriptionRequests: [], portfolioProfiles: [], notifications: [], notificationPreferences: [], passwordResetTokens: [], passwordResetRateEvents: [], emailJobs: [] };
+    const internalFreeState = { ...state, subscriptionRequests: [], portfolioProfiles: [], notifications: [], notificationPreferences: [], passwordResetTokens: [], passwordResetRateEvents: [], emailJobs: [], reportExports: [], reportRateEvents: [] };
     const safeState = !userId
       ? { ...internalFreeState, accounts: [], payments: [], portfolio: [], planPriceHistory: [], auditLogs: [] }
       : role === "ADMIN"
@@ -309,7 +315,7 @@ export async function PUT(request: Request) {
         });
       const otherPortfolios = current.portfolio.filter((item) => { const owner = stringField(item, "userId"); return owner && owner !== userId.toLowerCase(); });
       const ownPortfolio = incoming.portfolio.map((item) => item && typeof item === "object" ? { ...(item as Record<string, unknown>), userId } : item);
-      body = { ...incoming, accounts, portfolio: [...otherPortfolios, ...ownPortfolio], subscriptionRequests: current.subscriptionRequests, portfolioProfiles: current.portfolioProfiles, notifications: current.notifications, notificationPreferences: current.notificationPreferences, passwordResetTokens: current.passwordResetTokens, passwordResetRateEvents: current.passwordResetRateEvents, emailJobs: current.emailJobs };
+      body = { ...incoming, accounts, portfolio: [...otherPortfolios, ...ownPortfolio], subscriptionRequests: current.subscriptionRequests, portfolioProfiles: current.portfolioProfiles, notifications: current.notifications, notificationPreferences: current.notificationPreferences, passwordResetTokens: current.passwordResetTokens, passwordResetRateEvents: current.passwordResetRateEvents, emailJobs: current.emailJobs, reportExports: current.reportExports, reportRateEvents: current.reportRateEvents };
     } else {
       const requestedAccount = incoming.accounts.find((item) => stringField(item, "id") === userId.toLowerCase());
       const accounts = current.accounts.map((item) => {
