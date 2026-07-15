@@ -18,10 +18,15 @@ type AppStatePayload = {
   cryptoSettings: Record<string, unknown>;
   subscriptionRequests: unknown[];
   portfolioProfiles: unknown[];
+  notifications: unknown[];
+  notificationPreferences: unknown[];
+  passwordResetTokens: unknown[];
+  passwordResetRateEvents: unknown[];
+  emailJobs: unknown[];
   auditLogs: unknown[];
 };
 
-const allClientModules = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "alfatec_portfolio_method", "radar", "relatorios", "graham_valuation", "alfatec_fiis", "alfatec_crypto_method", "plano", "configuracoes"];
+const allClientModules = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "alfatec_portfolio_method", "radar", "notificacoes", "relatorios", "graham_valuation", "alfatec_fiis", "alfatec_crypto_method", "plano", "configuracoes"];
 const appStateBlobPath = process.env.APP_STATE_BLOB_PATH || "alfatec-invest-pro/app-state.json";
 const defaultGrahamSettings = { defaultY: 5.5, minGrowth: 0, maxGrowth: 20, scoreWeight: 10, enabled: true, clientsCanEditGrowth: true, clientsCanEditY: false };
 const defaultFiiWeights = { qualidade: 20, renda: 18, risco: 16, valuation: 14, gestao: 12, liquidez: 6, diversificacao: 14 };
@@ -57,6 +62,11 @@ const defaultState: AppStatePayload = {
   cryptoSettings: defaultCryptoSettings,
   subscriptionRequests: [],
   portfolioProfiles: [],
+  notifications: [],
+  notificationPreferences: [],
+  passwordResetTokens: [],
+  passwordResetRateEvents: [],
+  emailJobs: [],
   auditLogs: []
 };
 
@@ -100,11 +110,17 @@ function mergeDefaultAccounts(accounts: unknown[]) {
   return merged;
 }
 
+function ensureNotificationPermission(value: unknown) {
+  if (!value || typeof value !== "object") return value;
+  const item = value as Record<string, unknown>;
+  const permissions = Array.isArray(item.permissions) ? item.permissions.filter((entry): entry is string => typeof entry === "string") : [];
+  return { ...item, permissions: permissions.includes("notificacoes") ? permissions : [...permissions, "notificacoes"] };
+}
 function normalizeState(value: unknown): AppStatePayload {
   const input = value && typeof value === "object" ? value as Partial<AppStatePayload> : {};
   return {
-    accounts: mergeDefaultAccounts(Array.isArray(input.accounts) ? input.accounts : []),
-    plans: Array.isArray(input.plans) && input.plans.length > 0 ? input.plans : defaultState.plans,
+    accounts: mergeDefaultAccounts(Array.isArray(input.accounts) ? input.accounts : []).map(ensureNotificationPermission),
+    plans: (Array.isArray(input.plans) && input.plans.length > 0 ? input.plans : defaultState.plans).map(ensureNotificationPermission),
     payments: Array.isArray(input.payments) ? input.payments : [],
     portfolio: Array.isArray(input.portfolio) ? input.portfolio : [],
     planPriceHistory: Array.isArray(input.planPriceHistory) ? input.planPriceHistory : [],
@@ -113,6 +129,11 @@ function normalizeState(value: unknown): AppStatePayload {
     cryptoSettings: input.cryptoSettings && typeof input.cryptoSettings === "object" ? { ...defaultCryptoSettings, ...input.cryptoSettings } : defaultCryptoSettings,
     subscriptionRequests: Array.isArray(input.subscriptionRequests) ? input.subscriptionRequests : [],
     portfolioProfiles: Array.isArray(input.portfolioProfiles) ? input.portfolioProfiles : [],
+    notifications: Array.isArray(input.notifications) ? input.notifications : [],
+    notificationPreferences: Array.isArray(input.notificationPreferences) ? input.notificationPreferences : [],
+    passwordResetTokens: Array.isArray(input.passwordResetTokens) ? input.passwordResetTokens : [],
+    passwordResetRateEvents: Array.isArray(input.passwordResetRateEvents) ? input.passwordResetRateEvents : [],
+    emailJobs: Array.isArray(input.emailJobs) ? input.emailJobs : [],
     auditLogs: Array.isArray(input.auditLogs) ? input.auditLogs : []
   };
 }
@@ -233,12 +254,16 @@ export async function GET(request: Request) {
     const userId = await sessionUserId(request);
     const current = state.accounts.find((item) => stringField(item, "id") === userId?.toLowerCase());
     const role = current && typeof current === "object" ? String((current as Record<string, unknown>).role ?? "") : "";
-    const withoutHashes = (items: unknown[]) => items.map((item) => item && typeof item === "object" ? { ...(item as Record<string, unknown>), passwordHash: "" } : item);
+    const withoutHashes = (items: unknown[]) => items.map((item) => {
+      if (!item || typeof item !== "object") return item;
+      const { passwordHash: _passwordHash, passwordHistory: _passwordHistory, resetTokenHash: _resetTokenHash, failedLoginAttempts: _failedLoginAttempts, loginLockedUntil: _loginLockedUntil, ...safe } = item as Record<string, unknown>;
+      return { ...safe, passwordHash: "" };
+    });
     const ownPortfolio = userId ? state.portfolio.filter((item) => {
       const owner = stringField(item, "userId");
       return owner === userId.toLowerCase() || (role === "ADMIN" && !owner);
     }).map((item) => item && typeof item === "object" ? Object.fromEntries(Object.entries(item as Record<string, unknown>).filter(([key]) => key !== "userId")) : item) : [];
-    const internalFreeState = { ...state, subscriptionRequests: [], portfolioProfiles: [] };
+    const internalFreeState = { ...state, subscriptionRequests: [], portfolioProfiles: [], notifications: [], notificationPreferences: [], passwordResetTokens: [], passwordResetRateEvents: [], emailJobs: [] };
     const safeState = !userId
       ? { ...internalFreeState, accounts: [], payments: [], portfolio: [], planPriceHistory: [], auditLogs: [] }
       : role === "ADMIN"
@@ -268,9 +293,23 @@ export async function PUT(request: Request) {
     let body: AppStatePayload;
     if (role === "ADMIN") {
       const currentById = new Map(current.accounts.map((item) => [stringField(item, "id"), item]));
+      const editableAccountFields = ["name", "email", "phone", "planId", "planValue", "status", "dueDate", "planStartedAt", "subscriptionStatus", "notes", "permissions"] as const;
+      const accounts = incoming.accounts
+        .filter((item) => currentById.has(stringField(item, "id")))
+        .map((item) => {
+          if (!item || typeof item !== "object") return item;
+          const existing = currentById.get(stringField(item, "id"));
+          if (!existing || typeof existing !== "object") return item;
+          const requested = item as Record<string, unknown>;
+          const merged = { ...(existing as Record<string, unknown>) };
+          for (const field of editableAccountFields) {
+            if (Object.prototype.hasOwnProperty.call(requested, field)) merged[field] = requested[field];
+          }
+          return merged;
+        });
       const otherPortfolios = current.portfolio.filter((item) => { const owner = stringField(item, "userId"); return owner && owner !== userId.toLowerCase(); });
       const ownPortfolio = incoming.portfolio.map((item) => item && typeof item === "object" ? { ...(item as Record<string, unknown>), userId } : item);
-      body = { ...incoming, accounts: incoming.accounts.filter((item) => currentById.has(stringField(item, "id"))).map((item) => item && typeof item === "object" ? { ...(item as Record<string, unknown>), passwordHash: String((currentById.get(stringField(item, "id")) as Record<string, unknown> | undefined)?.passwordHash ?? "") } : item), portfolio: [...otherPortfolios, ...ownPortfolio], subscriptionRequests: current.subscriptionRequests, portfolioProfiles: current.portfolioProfiles };
+      body = { ...incoming, accounts, portfolio: [...otherPortfolios, ...ownPortfolio], subscriptionRequests: current.subscriptionRequests, portfolioProfiles: current.portfolioProfiles, notifications: current.notifications, notificationPreferences: current.notificationPreferences, passwordResetTokens: current.passwordResetTokens, passwordResetRateEvents: current.passwordResetRateEvents, emailJobs: current.emailJobs };
     } else {
       const requestedAccount = incoming.accounts.find((item) => stringField(item, "id") === userId.toLowerCase());
       const accounts = current.accounts.map((item) => {

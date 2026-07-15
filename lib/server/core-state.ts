@@ -3,7 +3,7 @@ import { hasDatabaseUrl, prisma } from "@/lib/prisma";
 
 export type CoreAccount = { id: string; role: "ADMIN" | "CLIENTE"; username: string; email: string; name: string; phone?: string; passwordHash: string; planId?: string; planValue?: number; status: string; dueDate?: string; planStartedAt?: string; permissions: string[]; [key: string]: unknown };
 export type CorePlan = { id: string; name: string; value: number; durationDays: number; status: string; permissions: string[]; [key: string]: unknown };
-export type CoreState = { accounts: CoreAccount[]; plans: CorePlan[]; payments: unknown[]; portfolio: unknown[]; planPriceHistory: unknown[]; grahamSettings: Record<string, unknown>; fiiSettings: Record<string, unknown>; cryptoSettings: Record<string, unknown>; subscriptionRequests?: unknown[]; portfolioProfiles?: unknown[]; auditLogs: Array<Record<string, unknown>>; [key: string]: unknown };
+export type CoreState = { accounts: CoreAccount[]; plans: CorePlan[]; payments: unknown[]; portfolio: unknown[]; planPriceHistory: unknown[]; grahamSettings: Record<string, unknown>; fiiSettings: Record<string, unknown>; cryptoSettings: Record<string, unknown>; subscriptionRequests?: unknown[]; portfolioProfiles?: unknown[]; notifications?: unknown[]; notificationPreferences?: unknown[]; passwordResetTokens?: unknown[]; passwordResetRateEvents?: unknown[]; emailJobs?: unknown[]; auditLogs: Array<Record<string, unknown>>; [key: string]: unknown };
 
 function findEnvBySuffix(suffix: string, validator: (value: string) => boolean = (value) => value.trim() !== "") {
   const direct = process.env[suffix];
@@ -18,7 +18,7 @@ const blobPath = process.env.APP_STATE_BLOB_PATH || "alfatec-invest-pro/app-stat
 const hasBlob = Boolean(blobToken || (blobStoreId && (process.env.VERCEL_OIDC_TOKEN || process.env.VERCEL === "1")));
 
 async function ensureStateTable() {
-  await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS "PersistentAppState" ("key" TEXT PRIMARY KEY, "value" JSONB NOT NULL, "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+  await prisma.$executeRaw`CREATE TABLE IF NOT EXISTS "PersistentAppState" ("key" TEXT PRIMARY KEY, "value" JSONB NOT NULL, "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW())`;
 }
 
 async function readDatabaseState(): Promise<CoreState | null> {
@@ -64,7 +64,7 @@ export async function writeCoreState(state: CoreState) {
 }
 
 export function publicAccount(account: CoreAccount) {
-  const { passwordHash: _passwordHash, ...safe } = account;
+  const { passwordHash: _passwordHash, passwordHistory: _passwordHistory, resetTokenHash: _resetTokenHash, failedLoginAttempts: _failedLoginAttempts, loginLockedUntil: _loginLockedUntil, ...safe } = account;
   return safe;
 }
 

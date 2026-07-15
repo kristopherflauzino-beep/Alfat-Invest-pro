@@ -44,7 +44,7 @@ import {
   WalletCards,
   X
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -123,11 +123,13 @@ import { CryptoOpportunityFilters, defaultCryptoOpportunityFilters, type CryptoO
 import { MercadoPagoLinkCheckout } from "@/components/subscriptions/MercadoPagoLinkCheckout";
 import { AdminSubscriptionRequests } from "@/components/subscriptions/AdminSubscriptionRequests";
 import { AlfatecPortfolioMethod } from "@/components/portfolio/AlfatecPortfolioMethod";
+import { NotificationBell } from "@/components/notifications/NotificationBell";
+import { NotificationCenter } from "@/components/notifications/NotificationCenter";
 
 type Role = "ADMIN" | "CLIENTE";
 type ClientStatus = "ativo" | "pendente" | "bloqueado" | "vencido";
 type PaymentStatus = "pago" | "pendente" | "vencido" | "cancelado";
-type ClientModuleId = "dashboard" | "mercado" | "oportunidades" | "comparador" | "carteira" | "alfatec_portfolio_method" | "radar" | "relatorios" | "graham_valuation" | "alfatec_fiis" | "alfatec_crypto_method" | "plano" | "configuracoes";
+type ClientModuleId = "dashboard" | "mercado" | "oportunidades" | "comparador" | "carteira" | "alfatec_portfolio_method" | "radar" | "relatorios" | "graham_valuation" | "alfatec_fiis" | "alfatec_crypto_method" | "notificacoes" | "plano" | "configuracoes";
 type AdminModuleId = "admin-dashboard" | "clientes" | "planos" | "financeiro" | "admin-relatorios" | "configuracoes";
 type RangeId = "1D" | "5D" | "1M" | "6M" | "1A" | "5A" | "MAX";
 
@@ -226,7 +228,7 @@ type AppStatePayload = {
   auditLogs: AuditLog[];
 };
 
-const allClientModules: ClientModuleId[] = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "alfatec_portfolio_method", "radar", "relatorios", "graham_valuation", "alfatec_fiis", "alfatec_crypto_method", "plano", "configuracoes"];
+const allClientModules: ClientModuleId[] = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "alfatec_portfolio_method", "radar", "relatorios", "graham_valuation", "alfatec_fiis", "alfatec_crypto_method", "notificacoes", "plano", "configuracoes"];
 const clientModules: Array<{ id: ClientModuleId; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: "dashboard", label: "Dashboard", icon: Gauge },
   { id: "mercado", label: "Mercado", icon: BarChart3 },
@@ -238,7 +240,8 @@ const clientModules: Array<{ id: ClientModuleId; label: string; icon: React.Comp
   { id: "relatorios", label: "Relatórios", icon: FileSpreadsheet },
   { id: "graham_valuation", label: "Valuation Graham", icon: Calculator },
   { id: "alfatec_fiis", label: "Método AlfaTec FIIs", icon: Building2 },
-  { id: "alfatec_crypto_method", label: "Metodo AlfaTec Cripto", icon: Bitcoin },
+  { id: "alfatec_crypto_method", label: "Método AlfaTec Cripto", icon: Bitcoin },
+  { id: "notificacoes", label: "Notificações", icon: Bell },
   { id: "plano", label: "Plano", icon: WalletCards },
   { id: "configuracoes", label: "Configurações", icon: Settings }
 ];
@@ -844,13 +847,14 @@ export default function AlfatecInvestPro() {
   }, [currentUser?.role]);
   useEffect(() => setGrahamY(grahamSettings.defaultY), [grahamSettings.defaultY]);
   useEffect(() => { extraAssets.filter((asset) => asset.source === "external").forEach((asset) => window.localStorage.setItem("alfatec-quote-" + asset.ticker, JSON.stringify(asset))); }, [extraAssets]);
-  async function refreshTicker(tickerInput: string, options: { select?: boolean; silent?: boolean } = {}) {
+  async function refreshTicker(tickerInput: string, options: { select?: boolean; silent?: boolean; signal?: AbortSignal } = {}) {
     const clean = normalizeTicker(tickerInput);
     if (!isTickerLike(clean)) return null;
     if (!options.silent) { setMarketQuoteStatus("loading"); setMarketQuoteMessage("Atualizando..."); }
     try {
-      const response = await fetch("/api/quotes/market?ticker=" + encodeURIComponent(clean) + "&range=1y&interval=1d");
+      const response = await fetch("/api/quotes/market?ticker=" + encodeURIComponent(clean) + "&range=1y&interval=1d", { signal: options.signal });
       const data = await response.json();
+      if (options.signal?.aborted) return null;
       if (!response.ok) throw new Error(data?.error ?? "Dado indisponível");
       const previous = assets.find((item) => item.ticker === clean);
       const asset = quoteToAsset(data as ExternalQuote, previous);
@@ -861,6 +865,7 @@ export default function AlfatecInvestPro() {
       if (!options.silent) { setMarketQuoteStatus("idle"); setMarketQuoteMessage((asset.dataStatus ?? "Dados atualizados.") + " Fonte: " + (asset.sourceLabel ?? "Yahoo Finance")); }
       return asset;
     } catch (error) {
+      if (options.signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) return null;
       const cached = window.localStorage.getItem("alfatec-quote-" + clean);
       if (cached) { const asset = JSON.parse(cached) as Asset; setExtraAssets((current) => [asset, ...current.filter((item) => item.ticker !== asset.ticker)]); if (!options.silent) { setMarketQuoteStatus("error"); setMarketQuoteMessage("Fonte indisponível. Último dado disponível em cache."); } return asset; }
       if (!options.silent) { setMarketQuoteStatus("error"); setMarketQuoteMessage(error instanceof Error ? error.message : "Dado indisponível"); }
@@ -879,8 +884,9 @@ export default function AlfatecInvestPro() {
   useEffect(() => {
     const clean = normalizeTicker(marketSearch);
     if (!isTickerLike(clean)) return;
-    const timeout = window.setTimeout(() => { void refreshTicker(clean, { select: false }); }, 450);
-    return () => window.clearTimeout(timeout);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => { void refreshTicker(clean, { select: false, signal: controller.signal }); }, 450);
+    return () => { window.clearTimeout(timeout); controller.abort(); };
   }, [marketSearch]);
 
   useEffect(() => {
@@ -953,6 +959,7 @@ export default function AlfatecInvestPro() {
   }
 
   function handleAdminMenu(id: string) {
+    setGlobalSearch("");
     setAdminModule(id as ClientModuleId | AdminModuleId);
     if (allClientModules.includes(id as ClientModuleId)) setClientModule(id as ClientModuleId);
   }
@@ -1319,7 +1326,7 @@ export default function AlfatecInvestPro() {
   }
 
   return (
-    <Shell darkMode={darkMode} setDarkMode={setDarkMode} logout={logout} user={currentUser} modules={currentUser.role === "ADMIN" ? adminNavigationModules : allowedClientModules} activeId={currentUser.role === "ADMIN" ? adminModule : clientModule} onMenu={currentUser.role === "ADMIN" ? handleAdminMenu : (id) => setClientModule(id as ClientModuleId)}>
+    <Shell darkMode={darkMode} setDarkMode={setDarkMode} logout={logout} user={currentUser} modules={currentUser.role === "ADMIN" ? adminNavigationModules : allowedClientModules} activeId={currentUser.role === "ADMIN" ? adminModule : clientModule} onMenu={currentUser.role === "ADMIN" ? handleAdminMenu : (id) => { setGlobalSearch(""); setClientModule(id as ClientModuleId); }}>
       <div className="relative z-20">
         <GlobalSearchBox globalSearch={globalSearch} setGlobalSearch={setGlobalSearch} globalSuggestions={globalSuggestions} selectAsset={selectAsset} searchHistory={searchHistory} assets={assets} />
         {clientModule === "dashboard" && (
@@ -1448,6 +1455,8 @@ export default function AlfatecInvestPro() {
 
         {clientModule === "alfatec_portfolio_method" && <AlfatecPortfolioMethod lines={portfolioAnalysis.lines} userId={currentUser.id} />}
         {clientModule === "alfatec_crypto_method" && <AlfatecCryptoSection assets={assets} analyses={cryptoAnalyses} selectedTicker={cryptoTicker} loading={cryptoLoading} error={cryptoError} currentUserRole={currentUser.role} settings={cryptoSettings} onSelect={(ticker) => { setCryptoTicker(ticker); void loadCryptoData([ticker]); }} onRefresh={(ticker) => void loadCryptoData([ticker])} onSaveSettings={saveCryptoSettings} />}
+
+        {clientModule === "notificacoes" && <NotificationCenter />}
 
         {clientModule === "plano" && <ClientPlanSection user={currentUser} plans={plans} payments={payments} />}
 
@@ -1606,8 +1615,9 @@ function Shell({ darkMode, setDarkMode, logout, user, modules, activeId, onMenu,
                   <h2 className="truncate text-lg font-black sm:text-2xl">{activeModule?.label ?? "INVEST PRO"}</h2>
                 </div>
               </div>
-              <div className="hidden items-center gap-2 sm:flex">
-                <span className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-bold dark:bg-white/10">{user.role === "ADMIN" ? "Admin" : "Cliente"}</span>
+              <div className="flex items-center gap-2">
+                <NotificationBell onOpen={() => onMenu("notificacoes")} />
+                <span className="hidden rounded-2xl bg-slate-100 px-4 py-2 text-sm font-bold dark:bg-white/10 sm:inline-flex">{user.role === "ADMIN" ? "Admin" : "Cliente"}</span>
                 <button onClick={() => setDarkMode(!darkMode)} className="rounded-2xl border border-slate-200 bg-white p-3 transition hover:scale-105 dark:border-white/10 dark:bg-white/5">{darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}</button>
               </div>
             </div>
@@ -1676,6 +1686,7 @@ function LoginScreen({ darkMode, setDarkMode, loginUser, setLoginUser, loginPass
                   <span className="mb-2 block text-xs font-bold uppercase tracking-[0.2em] text-slate-400">Senha</span>
                   <div className="relative"><KeyRound className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" /><input type={showPassword ? "text" : "password"} value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-12 pr-12 outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10 text-slate-950 placeholder:text-slate-400 dark:border-white/10 dark:bg-white/5 dark:text-white dark:placeholder:text-slate-400" placeholder="Digite sua senha" autoComplete="current-password" /><button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400" aria-label="Visualizar ou ocultar senha">{showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}</button></div>
                 </label>
+                <div className="mb-4 text-right"><a href="/esqueci-minha-senha" className="text-sm font-bold text-cyan-600 hover:underline dark:text-cyan-300">Esqueci minha senha</a></div>
                 {loginError && <div className="mb-4 rounded-2xl bg-red-500/10 p-4 text-sm font-semibold text-red-500">{loginError}</div>}
                 {!stateLoaded && <div className="mb-4 rounded-2xl bg-amber-500/10 p-4 text-sm font-semibold text-amber-600 dark:text-amber-300">Carregando dados do banco...</div>}
                 {databaseError && <div className="mb-4 rounded-2xl bg-amber-500/10 p-4 text-sm font-semibold text-amber-700 dark:text-amber-300">{databaseError}</div>}
@@ -1703,9 +1714,17 @@ function LoginScreen({ darkMode, setDarkMode, loginUser, setLoginUser, loginPass
 }
 
 function GlobalSearchBox({ globalSearch, setGlobalSearch, globalSuggestions, selectAsset, searchHistory, assets }: { globalSearch: string; setGlobalSearch: (value: string) => void; globalSuggestions: Asset[]; selectAsset: (asset: Asset, module?: ClientModuleId) => void; searchHistory: string[]; assets: Asset[] }) {
-  return <div className="relative mb-6"><Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" /><input value={globalSearch} onChange={(event) => setGlobalSearch(event.target.value)} placeholder="Pesquisar em toda a plataforma: ticker, nome, setor, segmento ou tipo..." className="h-14 w-full rounded-3xl border border-slate-200 bg-white pl-12 pr-12 text-sm outline-none transition focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10 text-slate-950 placeholder:text-slate-400 dark:border-white/10 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-400" />{globalSearch && <button onClick={() => setGlobalSearch("")} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400"><X className="h-4 w-4" /></button>}{globalSearch && <div className="absolute top-16 z-50 w-full overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-premium dark:border-white/10 dark:bg-slate-900"><div className="border-b border-slate-100 p-3 text-xs font-semibold uppercase tracking-[0.2em] text-slate-400 dark:border-white/10">Sugestões instantâneas</div>{globalSuggestions.map((asset) => <button key={asset.ticker} onClick={() => { selectAsset(asset); setGlobalSearch(""); }} className="flex w-full items-center justify-between px-4 py-3 text-left transition hover:bg-slate-50 dark:hover:bg-white/5"><span><strong>{asset.ticker}</strong><span className="ml-2 text-sm text-slate-500">{asset.name}</span></span><span className="rounded-full bg-slate-100 px-2 py-1 text-xs dark:bg-white/10">{typeLabels[asset.type]}</span></button>)}<div className="flex flex-wrap gap-2 border-t border-slate-100 p-3 text-xs dark:border-white/10">{searchHistory.length > 0 && <span className="text-slate-400">Histórico:</span>}{searchHistory.map((ticker) => <button key={ticker} onClick={() => selectAsset(getAsset(ticker, assets))} className="rounded-full bg-slate-100 px-2 py-1 dark:bg-white/10">{ticker}</button>)}</div></div>}</div>;
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const containerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const closeOutside = (event: PointerEvent) => { if (!containerRef.current?.contains(event.target as Node)) setOpen(false); };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, []);
+  const choose = (asset: Asset) => { setOpen(false); setGlobalSearch(""); selectAsset(asset); };
+  return <div ref={containerRef} className="relative mb-6"><Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" /><input value={globalSearch} onFocus={() => setOpen(Boolean(globalSearch.trim()))} onChange={(event) => { setGlobalSearch(event.target.value); setOpen(Boolean(event.target.value.trim())); setActiveIndex(0); }} onKeyDown={(event) => { if (event.key === "Escape") { setOpen(false); event.currentTarget.blur(); } else if (event.key === "ArrowDown") { event.preventDefault(); setActiveIndex((value) => Math.min(value + 1, globalSuggestions.length - 1)); } else if (event.key === "ArrowUp") { event.preventDefault(); setActiveIndex((value) => Math.max(value - 1, 0)); } else if (event.key === "Enter" && open && globalSuggestions[activeIndex]) { event.preventDefault(); choose(globalSuggestions[activeIndex]); } }} role="combobox" aria-expanded={open} aria-autocomplete="list" placeholder="Pesquisar em toda a plataforma: ticker, nome, setor, segmento ou tipo..." className="h-14 w-full rounded-3xl border border-slate-200 bg-white pl-12 pr-12 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10 dark:border-white/10 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-400" />{globalSearch && <button type="button" onClick={() => { setGlobalSearch(""); setOpen(false); }} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400" aria-label="Limpar busca"><X className="h-4 w-4" /></button>}{open && globalSearch.trim() && <div role="listbox" className="absolute top-16 z-50 w-full overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-premium dark:border-white/10 dark:bg-slate-900"><div className="border-b border-slate-100 p-3 text-xs font-semibold uppercase tracking-[0.2em] text-slate-400 dark:border-white/10">Sugestões instantâneas</div>{globalSuggestions.map((asset, index) => <button key={asset.ticker} type="button" role="option" aria-selected={activeIndex === index} onPointerDown={(event) => event.preventDefault()} onClick={() => choose(asset)} className={cls("flex w-full items-center justify-between px-4 py-3 text-left transition hover:bg-slate-50 dark:hover:bg-white/5", activeIndex === index && "bg-cyan-500/10")}><span><strong>{asset.ticker}</strong><span className="ml-2 text-sm text-slate-500 dark:text-slate-300">{asset.name}</span></span><span className="rounded-full bg-slate-100 px-2 py-1 text-xs dark:bg-white/10">{typeLabels[asset.type]}</span></button>)}{globalSuggestions.length === 0 && <p className="p-4 text-sm text-slate-500 dark:text-slate-300">Nenhum ativo encontrado.</p>}<div className="flex flex-wrap gap-2 border-t border-slate-100 p-3 text-xs dark:border-white/10">{searchHistory.length > 0 && <span className="text-slate-400">Histórico:</span>}{searchHistory.map((ticker) => <button type="button" key={ticker} onClick={() => choose(getAsset(ticker, assets))} className="rounded-full bg-slate-100 px-2 py-1 dark:bg-white/10">{ticker}</button>)}</div></div>}</div>;
 }
-
 function Section({ title, subtitle, eyebrow, children }: { title: string; subtitle: string; eyebrow: string; children: React.ReactNode }) {
   return <motion.section initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28 }}><div className="mb-6"><p className="text-xs font-black uppercase tracking-[0.28em] text-cyan-500">{eyebrow}</p><h2 className="mt-2 text-3xl font-black tracking-tight lg:text-4xl">{title}</h2><p className="mt-2 max-w-3xl text-slate-600 dark:text-slate-300">{subtitle}</p></div>{children}</motion.section>;
 }
@@ -1717,7 +1736,7 @@ function MetricCard({ label, value, icon: Icon, tone }: { label: string; value: 
   return <div className="rounded-[1.7rem] border border-slate-200 bg-white p-5 shadow-premium dark:border-white/10 dark:bg-slate-900/80"><div className={cls("mb-4 grid h-11 w-11 place-items-center rounded-2xl bg-gradient-to-br text-white", tones[tone])}><Icon className="h-5 w-5" /></div><p className="text-sm text-slate-500 dark:text-slate-400">{label}</p><p className="mt-1 text-2xl font-black tracking-tight">{value}</p></div>;
 }
 function AssetCard({ asset, favorites, onSelect, onFavorite }: { asset: Asset; favorites: string[]; onSelect: () => void; onFavorite: () => void }) {
-  return <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/5"><div className="flex items-start justify-between gap-3"><button onClick={onSelect} className="text-left"><p className="text-xs text-slate-500 dark:text-slate-300">{typeLabels[asset.type]} • {asset.segment}</p><h3 className="mt-1 text-xl font-black">{asset.ticker}</h3><p className="text-sm text-slate-500 dark:text-slate-300">{asset.name}</p>{asset.source === "external" && <p className="mt-2 text-xs font-bold text-cyan-600 dark:text-cyan-300">Fonte: Google Finance via provedor externo</p>}</button><button onClick={onFavorite} className="rounded-xl bg-white p-2 dark:bg-white/10"><Star className={cls("h-4 w-4", favorites.includes(asset.ticker) && "fill-amber-400 text-amber-400")} /></button></div><div className="mt-4 grid grid-cols-3 gap-2"><InfoTile label="Preço" value={money.format(asset.price)} /><InfoTile label="Dia" value={pct(asset.changeDay)} /><InfoTile label="Score" value={`${asset.score}/100`} /></div></div>;
+  return <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/5"><div className="flex items-start justify-between gap-3"><button onClick={onSelect} className="text-left"><p className="text-xs text-slate-500 dark:text-slate-300">{typeLabels[asset.type]} • {asset.segment}</p><h3 className="mt-1 text-xl font-black">{asset.ticker}</h3>{asset.source === "external" && <p className="mt-2 text-xs font-bold text-cyan-600 dark:text-cyan-300">Fonte: Google Finance via provedor externo</p>}</button><button onClick={onFavorite} className="rounded-xl bg-white p-2 dark:bg-white/10"><Star className={cls("h-4 w-4", favorites.includes(asset.ticker) && "fill-amber-400 text-amber-400")} /></button></div><div className="mt-4 grid grid-cols-3 gap-2"><InfoTile label="Preço" value={money.format(asset.price)} /><InfoTile label="Dia" value={pct(asset.changeDay)} /><InfoTile label="Score" value={`${asset.score}/100`} /></div></div>;
 }
 function AssetPanel({ asset, favorites, setFavorites, onAddToPortfolio, onOpenFiiAnalysis, cryptoAnalysis, onOpenCryptoAnalysis }: { asset: Asset; favorites: string[]; setFavorites: React.Dispatch<React.SetStateAction<string[]>>; onAddToPortfolio: (asset: Asset) => void; onOpenFiiAnalysis?: (asset: Asset) => void; cryptoAnalysis?: AlfatecCryptoAnalysis | null; onOpenCryptoAnalysis?: (asset: Asset) => void }) {
   const isFavorite = favorites.includes(asset.ticker);
@@ -1725,15 +1744,24 @@ function AssetPanel({ asset, favorites, setFavorites, onAddToPortfolio, onOpenFi
 }
 function FiiAssetMiniSummary({ asset, onOpen }: { asset: Asset; onOpen: () => void }) {
   const analysis = analisarAlfatecFii(asset);
-  return <div className="mt-4 rounded-3xl border border-cyan-400/30 bg-cyan-500/10 p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-black uppercase tracking-[0.18em] text-cyan-600 dark:text-cyan-300">Método AlfaTec FIIs</p><p className="mt-1 font-black">Score AlfaTec FIIs: {analysis.score === null ? "dados insuficientes" : `${analysis.score}/100`} ? {analysis.classification}</p><p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{analysis.kindLabel}. Confiança: {analysis.confidence === "Media" ? "Média" : analysis.confidence}. {analysis.valuationInterpretation}.</p></div><button type="button" onClick={onOpen} className="rounded-2xl bg-cyan-500 px-4 py-3 text-sm font-bold text-white">Ver análise completa</button></div></div>;
+  return <div className="mt-4 rounded-3xl border border-cyan-400/30 bg-cyan-500/10 p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-black uppercase tracking-[0.18em] text-cyan-600 dark:text-cyan-300">Método AlfaTec FIIs</p><p className="mt-1 font-black">Score AlfaTec FIIs: {analysis.score === null ? "dados insuficientes" : `${analysis.score}/100`} · {analysis.classification}</p><p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{analysis.kindLabel}. Confiança: {analysis.confidence === "Media" ? "Média" : analysis.confidence}. {analysis.valuationInterpretation}.</p></div><button type="button" onClick={onOpen} className="rounded-2xl bg-cyan-500 px-4 py-3 text-sm font-bold text-white">Ver análise completa</button></div></div>;
 }
 
 function InfoTile({ label, value, dark = false }: { label: string; value: string; dark?: boolean }) {
   return <div className={cls("rounded-2xl p-3", dark ? "bg-white/10" : "bg-slate-50 dark:bg-white/5")}><p className={cls("text-xs", dark ? "text-slate-300" : "text-slate-500")}>{label}</p><p className="mt-1 font-black">{value}</p></div>;
 }
 function SearchBox({ label, value, onChange, assets, onSelect }: { label: string; value: string; onChange: (value: string) => void; assets: Asset[]; onSelect: (asset: Asset) => void }) {
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const containerRef = useRef<HTMLDivElement>(null);
   const suggestions = searchAssets(value, "TODOS", assets).slice(0, 6);
-  return <div className="relative"><label className="mb-2 block text-xs font-bold uppercase tracking-[0.2em] text-slate-400">{label}</label><Search className="absolute left-4 top-[43px] h-5 w-5 text-slate-400" /><input value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { const asset = suggestions[0]; if (asset) onSelect(asset); } }} className="h-12 w-full rounded-2xl border border-slate-200 bg-white pl-12 outline-none focus:border-cyan-400 text-slate-950 placeholder:text-slate-400 dark:border-white/10 dark:bg-white/5 dark:text-white dark:placeholder:text-slate-400" placeholder="Digite ticker ou nome" />{value && <div className="absolute z-30 mt-2 w-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-premium dark:border-white/10 dark:bg-slate-900">{suggestions.map((asset) => <button key={asset.ticker} onClick={() => onSelect(asset)} className="flex w-full items-center justify-between px-4 py-3 text-left text-sm hover:bg-slate-50 dark:hover:bg-white/5"><span><strong>{asset.ticker}</strong><span className="ml-2 text-slate-500">{asset.name}</span></span><span className="text-xs text-slate-400">{typeLabels[asset.type]}</span></button>)}</div>}</div>;
+  useEffect(() => {
+    const closeOutside = (event: PointerEvent) => { if (!containerRef.current?.contains(event.target as Node)) setOpen(false); };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, []);
+  const choose = (asset: Asset) => { setOpen(false); onSelect(asset); };
+  return <div ref={containerRef} className="relative"><label className="mb-2 block text-xs font-bold uppercase tracking-[0.2em] text-slate-400">{label}</label><Search className="pointer-events-none absolute left-4 top-[43px] h-5 w-5 text-slate-400" /><input value={value} onFocus={() => setOpen(Boolean(value.trim()))} onChange={(event) => { onChange(event.target.value); setOpen(Boolean(event.target.value.trim())); setActiveIndex(0); }} onKeyDown={(event) => { if (event.key === "Escape") { setOpen(false); event.currentTarget.blur(); } else if (event.key === "ArrowDown") { event.preventDefault(); setActiveIndex((index) => Math.min(index + 1, suggestions.length - 1)); } else if (event.key === "ArrowUp") { event.preventDefault(); setActiveIndex((index) => Math.max(index - 1, 0)); } else if (event.key === "Enter" && suggestions[activeIndex]) { event.preventDefault(); choose(suggestions[activeIndex]); } }} role="combobox" aria-expanded={open} aria-autocomplete="list" className="h-12 w-full rounded-2xl border border-slate-200 bg-white pl-12 pr-4 text-slate-950 outline-none placeholder:text-slate-400 focus:border-cyan-400 dark:border-white/10 dark:bg-white/5 dark:text-white dark:placeholder:text-slate-400" placeholder="Digite ticker ou nome" />{open && value.trim() && <div role="listbox" className="absolute z-30 mt-2 w-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-premium dark:border-white/10 dark:bg-slate-900">{suggestions.map((asset, index) => <button key={asset.ticker} type="button" role="option" aria-selected={activeIndex === index} onPointerDown={(event) => event.preventDefault()} onClick={() => choose(asset)} className={cls("flex w-full items-center justify-between px-4 py-3 text-left text-sm hover:bg-slate-50 dark:hover:bg-white/5", activeIndex === index && "bg-cyan-500/10")}><span><strong>{asset.ticker}</strong><span className="ml-2 text-slate-500 dark:text-slate-300">{asset.name}</span></span><span className="text-xs text-slate-400">{typeLabels[asset.type]}</span></button>)}{suggestions.length === 0 && <p className="p-4 text-sm text-slate-500 dark:text-slate-300">Nenhum ativo encontrado.</p>}</div>}</div>;
 }
 function PerformancePill({ asset, value }: { asset: Asset; value: number }) {
   return <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/5"><div className="flex items-center justify-between"><div><p className="text-sm text-slate-500">{asset.name}</p><p className="text-xl font-black">{asset.ticker}</p></div><div className={cls("flex items-center gap-1 rounded-full px-3 py-1 text-sm font-black", value >= 0 ? "bg-emerald-500/10 text-emerald-500" : "bg-red-500/10 text-red-500")}>{value >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}{pct(value)}</div></div></div>;
@@ -1911,7 +1939,7 @@ function RankingRow({ asset, index, onClick }: { asset: Asset; index: number; on
       <span className="min-w-0 flex-1">
         <strong>{asset.ticker}</strong><span className="ml-2 text-sm text-slate-500 dark:text-slate-300">{asset.name}</span>
         <p className="mt-1 text-xs text-slate-400">{typeLabels[asset.type]} · {asset.segment}</p>
-        <p className="mt-2 text-xs font-semibold text-cyan-700 dark:text-cyan-300">Dividendos: {dividendFrequency(asset)} ? {dividend === undefined ? "sem valor recorrente" : `${money.format(dividend)} por ação/cota`}</p>
+        <p className="mt-2 text-xs font-semibold text-cyan-700 dark:text-cyan-300">Dividendos: {dividendFrequency(asset)} · {dividend === undefined ? "sem valor recorrente" : `${money.format(dividend)} por ação/cota`}</p>
         <p className="mt-1 text-xs font-semibold text-slate-600 dark:text-slate-300">Graham: {graham.value === undefined ? "não aplicável" : `${money.format(graham.value)} - margem ${pct(graham.safetyMargin)}`} - contribuição {grahamContribution}/10</p>
       </span>
       <span className="rounded-full bg-cyan-500/10 px-3 py-1 font-black text-cyan-600 dark:text-cyan-300">{asset.score}</span>

@@ -33,10 +33,18 @@ O menu `Analise e Balanceamento` compara a carteira atual com a carteira-alvo. I
 
 ## Pagamento pelo link oficial
 
-A unica opcao apresentada ao cliente e `Pagar com Mercado Pago`, que abre em nova aba:
+A única opção apresentada ao cliente é `Pagar com Mercado Pago`, no link oficial:
 
 ```text
 https://link.mercadopago.com.br/alfatecinvestpro
 ```
 
-O sistema nao usa credenciais do Mercado Pago, nao cria cobrancas por API e nao confirma pagamentos automaticamente. O clique registra uma solicitacao com status `Aguardando confirmacao`. O cliente pode informar os dados nao sensiveis da transacao, e somente o administrador pode conferir e ativar o plano manualmente.
+O clique cria uma intenção válida por 24 horas e abre o Mercado Pago em nova aba. Somente depois disso o cliente pode solicitar verificação. O pagamento precisa ser confirmado e a assinatura ativada manualmente pelo administrador; abrir ou retornar do link nunca libera o plano.
+
+## Notificações e e-mail
+
+O menu `Notificações` possui sino com contador, filtros, leitura, exclusão e preferências por assunto. Eventos essenciais de plano, pagamento, assinatura e segurança permanecem ativos. Consulte [EMAIL_SETUP.md](./EMAIL_SETUP.md) para configurar o SMTP privado na Vercel.
+
+## Recuperação de senha
+
+O login oferece `Esqueci minha senha`. O token é aleatório, armazenado apenas como hash, expira em 30 minutos, aceita um único uso e revoga as sessões anteriores após a redefinição.
