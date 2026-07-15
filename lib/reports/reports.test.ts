@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildAdminReport, buildClientReport, filterReportSections } from "@/lib/reports/build-report";
 import { choosePdfOrientation, createCsvArtifact, createJsonArtifact, createPdfArtifact, createPngArtifact, createXlsxArtifact, reportFilename, sanitizeFilename } from "@/lib/reports/exporters";
 import { defaultPdfOptions } from "@/lib/reports/types";
+import { calculatePreviewZoom, paginatePreviewSections } from "@/lib/reports/preview";
 import type { PortfolioAnalysis } from "@/lib/types";
 
 const emptyPortfolio: PortfolioAnalysis = {
@@ -115,6 +116,28 @@ describe("relatórios", () => {
     expect(artifact.filename).toMatch(/\.png$/);
     expect(artifact.blob.type).toBe("image/png");
     expect(context.fillText).toHaveBeenCalled();
+  });
+  it("calcula zoom responsivo sem ultrapassar os limites da prévia", () => {
+    expect(calculatePreviewZoom({ availableWidth: 490, availableHeight: 900, pageWidth: 980, pageHeight: 1386, mode: "fit-width" })).toBe(0.5);
+    expect(calculatePreviewZoom({ availableWidth: 2000, availableHeight: 2000, pageWidth: 980, pageHeight: 1386, mode: "fit-width" })).toBe(1.25);
+    expect(calculatePreviewZoom({ availableWidth: 980, availableHeight: 693, pageWidth: 980, pageHeight: 1386, mode: "fit-page" })).toBe(0.5);
+    expect(calculatePreviewZoom({ availableWidth: 300, availableHeight: 300, pageWidth: 980, pageHeight: 1386, mode: "actual" })).toBe(1);
+  });
+
+  it("distribui seções longas em páginas sem duplicar o resumo", () => {
+    const rows = Array.from({ length: 31 }, (_, index) => [
+      { value: "ATIVO" + index, format: "text" as const },
+      { value: index, format: "number" as const }
+    ]);
+    const pages = paginatePreviewSections([
+      { id: "summary", group: "Carteira", title: "Resumo" },
+      { id: "assets", group: "Carteira", title: "Ativos", table: { columns: [{ key: "ticker", label: "Ativo" }, { key: "value", label: "Valor" }], rows } }
+    ]);
+    const sections = pages.flat();
+    expect(sections.some((section) => section.id === "summary")).toBe(false);
+    expect(sections).toHaveLength(3);
+    expect(sections.every((section) => (section.table?.rows.length ?? 0) <= 14)).toBe(true);
+    expect(sections[1].title).toContain("continuação");
   });
   it("aplica filtros administrativos sem misturar clientes", () => {
     const report = buildAdminReport({

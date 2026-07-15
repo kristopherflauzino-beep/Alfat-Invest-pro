@@ -7,7 +7,7 @@ export function ReportHeader({ report, compact = false }: { report: ReportDocume
   const [logoFailed, setLogoFailed] = useState(false);
   return (
     <header className="border-b-2 border-teal-500 pb-5">
-      <div className="flex items-start justify-between gap-5">
+      <div className="flex items-start gap-5">
         <div className="flex min-w-0 items-center gap-4">
           {!logoFailed ? (
             <img src="/logo-alfatec-report.png" alt="AlfaTec Invest Pro" className={compact ? "h-12 w-12 shrink-0 object-contain" : "h-20 w-20 shrink-0 object-contain"} onError={() => setLogoFailed(true)} />
@@ -19,11 +19,6 @@ export function ReportHeader({ report, compact = false }: { report: ReportDocume
             <h1 className={compact ? "text-lg font-black text-slate-950" : "text-2xl font-black text-slate-950"}>{report.title}</h1>
             <p className="mt-1 text-xs text-slate-600">{report.reportType}</p>
           </div>
-        </div>
-        <div className="hidden text-right text-xs text-slate-600 sm:block">
-          <p className="font-bold text-slate-900">{report.user.name}</p>
-          <p>{report.period.label}</p>
-          <p>{new Date(report.generatedAt).toLocaleString("pt-BR")}</p>
         </div>
       </div>
     </header>
