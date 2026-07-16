@@ -15,6 +15,7 @@ export type PendingRegistrationStatus =
 
 export type PendingRegistration = {
   id: string;
+  userId?: string;
   name: string;
   username: string;
   email: string;

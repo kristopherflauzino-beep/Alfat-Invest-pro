@@ -32,7 +32,7 @@ export async function POST(request: Request) {
     const current = registrations[index];
     if (!current) return NextResponse.json({ error: "Cadastro não encontrado." }, { status: 404 });
     const status = pendingRegistrationState(current);
-    if (status === "expired") return NextResponse.json({ error: "Seu cadastro provisório expirou. Inicie novamente para continuar." }, { status: 410 });
+    if (status === "expired") return NextResponse.json({ error: "O prazo para concluir sua conta expirou. Inicie novamente para continuar." }, { status: 410 });
     if (!current.emailVerifiedAt) return NextResponse.json({ error: "Confirme seu e-mail antes de prosseguir." }, { status: 403 });
     if (["activated", "cancelled", "rejected"].includes(status)) return NextResponse.json({ error: "Este cadastro não aceita novas alterações." }, { status: 409 });
 
@@ -55,10 +55,28 @@ export async function POST(request: Request) {
         };
     registrations[index] = updated;
     state.pendingRegistrations = registrations;
+    const accountIndex = state.accounts.findIndex((item) =>
+      item.id === current.userId ||
+      item.email.toLowerCase() === current.email ||
+      item.username.toLowerCase() === current.username
+    );
+    const accountId = accountIndex >= 0 ? state.accounts[accountIndex].id : current.userId || current.id;
+    if (accountIndex >= 0) {
+      state.accounts[accountIndex] = {
+        ...state.accounts[accountIndex],
+        registrationStatus: updated.status,
+        paymentLinkOpenedAt: updated.paymentLinkOpenedAt,
+        paymentReportedAt: updated.paymentReportedAt,
+        paymentName: updated.paymentName,
+        approximatePaymentDate: updated.approximatePaymentDate,
+        transactionId: updated.transactionId,
+        customerNote: updated.customerNote
+      };
+    }
     state.auditLogs = [{
       id: crypto.randomUUID(),
       action: parsed.data.action === "open" ? "link_mercado_pago_cadastro_aberto" : "pagamento_cadastro_informado",
-      userId: current.id,
+      userId: accountId,
       userName: current.name,
       details: parsed.data.action === "open"
         ? "Link oficial do Mercado Pago aberto; nenhuma ativação automática realizada."
@@ -75,7 +93,7 @@ export async function POST(request: Request) {
       await sendEmail({
         to: current.email,
         ...template,
-        userId: current.id,
+        userId: accountId,
         type: "registration_payment_under_review",
         idempotencyKey: "registration-payment-review:" + current.id
       });

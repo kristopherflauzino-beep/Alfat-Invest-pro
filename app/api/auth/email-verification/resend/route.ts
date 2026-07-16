@@ -72,6 +72,19 @@ export async function POST(request: Request) {
       updatedAt: now.toISOString()
     };
     state.pendingRegistrations = registrations;
+    const accountIndex = state.accounts.findIndex((item) =>
+      item.id === registration.userId ||
+      item.email.toLowerCase() === registration.email ||
+      item.username.toLowerCase() === registration.username
+    );
+    const accountId = accountIndex >= 0 ? state.accounts[accountIndex].id : registration.userId || registration.id;
+    if (accountIndex >= 0) {
+      state.accounts[accountIndex] = {
+        ...state.accounts[accountIndex],
+        registrationStatus: "awaiting_email_confirmation",
+        registrationExpiresAt: registrations[index].expiresAt
+      };
+    }
     const event: EmailVerificationRateEvent = { id: crypto.randomUUID(), pendingRegistrationId: registration.id, emailHash, ipHash, createdAt: now.toISOString() };
     state.emailVerificationRateEvents = [event, ...rateEvents].slice(0, 5000);
     await writeCoreState(state);
@@ -81,7 +94,7 @@ export async function POST(request: Request) {
     await sendEmail({
       to: registration.email,
       ...template,
-      userId: registration.id,
+      userId: accountId,
       type: "registration_confirmation_resend",
       idempotencyKey: "registration-confirmation-resend:" + token.id
     });

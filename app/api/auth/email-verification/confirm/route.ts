@@ -40,7 +40,7 @@ export async function POST(request: Request) {
     const registrationIndex = registrations.findIndex((item) => item.id === token.pendingRegistrationId);
     const registration = registrations[registrationIndex];
     if (!registration || pendingRegistrationState(registration, now.getTime()) === "expired") {
-      return NextResponse.json({ error: "Seu cadastro provisório expirou. Inicie novamente para continuar." }, { status: 410 });
+      return NextResponse.json({ error: "O prazo para concluir sua conta expirou. Inicie novamente para continuar." }, { status: 410 });
     }
     if (registration.status !== "awaiting_email_confirmation") {
       return NextResponse.json({ error: "O e-mail deste cadastro já foi confirmado." }, { status: 409 });
@@ -56,6 +56,20 @@ export async function POST(request: Request) {
     };
     registrations[registrationIndex] = updated;
     state.pendingRegistrations = registrations;
+    const accountIndex = state.accounts.findIndex((item) =>
+      item.id === registration.userId ||
+      item.email.toLowerCase() === registration.email ||
+      item.username.toLowerCase() === registration.username
+    );
+    const accountId = accountIndex >= 0 ? state.accounts[accountIndex].id : registration.userId || registration.id;
+    if (accountIndex >= 0) {
+      state.accounts[accountIndex] = {
+        ...state.accounts[accountIndex],
+        emailVerifiedAt: now.toISOString(),
+        registrationStatus: "awaiting_payment",
+        registrationWorkflowId: registration.id
+      };
+    }
     state.emailVerificationTokens = tokens.map((item) =>
       item.pendingRegistrationId === registration.id && !item.usedAt ? { ...item, usedAt: now.toISOString() } : item
     );
@@ -78,9 +92,9 @@ export async function POST(request: Request) {
     state.auditLogs = [{
       id: crypto.randomUUID(),
       action: "email_cadastro_confirmado",
-      userId: registration.id,
+      userId: accountId,
       userName: registration.name,
-      details: "E-mail confirmado; cadastro provisório aguardando pagamento.",
+      details: "E-mail confirmado; conta aguardando pagamento.",
       origin: "public_registration",
       result: "awaiting_payment",
       createdAt: now.toISOString(),
@@ -93,7 +107,7 @@ export async function POST(request: Request) {
     await sendEmail({
       to: registration.email,
       ...userTemplate,
-      userId: registration.id,
+      userId: accountId,
       type: "registration_email_verified",
       idempotencyKey: "registration-email-verified:" + registration.id
     });

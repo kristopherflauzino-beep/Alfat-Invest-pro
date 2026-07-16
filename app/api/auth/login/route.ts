@@ -52,13 +52,23 @@ export async function POST(request: Request) {
           return NextResponse.json({ error: "Seu cadastro ainda aguarda a confirmação do pagamento e a ativação pelo administrador." }, { status: 403 });
         }
         if (status === "expired") {
-          return NextResponse.json({ error: "Seu cadastro provisório expirou. Inicie novamente para continuar." }, { status: 403 });
+          return NextResponse.json({ error: "O prazo para concluir sua conta expirou. Inicie novamente para continuar." }, { status: 403 });
         }
       }
       return NextResponse.json({ error: "Usuário ou senha inválidos." }, { status: 401 });
     }
     if (!await verifyPassword(input.data.password, account.passwordHash)) {
       return NextResponse.json({ error: "Usuário ou senha inválidos." }, { status: 401 });
+    }
+    const registrationStatus = typeof account.registrationStatus === "string" ? account.registrationStatus : "";
+    if (registrationStatus === "awaiting_email_confirmation") {
+      return NextResponse.json({ error: "Confirme seu e-mail antes de acessar a plataforma." }, { status: 403 });
+    }
+    if (["awaiting_payment", "payment_under_review", "paid"].includes(registrationStatus)) {
+      return NextResponse.json({ error: "Sua conta aguarda a confirmação do pagamento e a ativação pelo administrador." }, { status: 403 });
+    }
+    if (["expired", "cancelled", "rejected"].includes(registrationStatus)) {
+      return NextResponse.json({ error: "Esta conta não está liberada. Entre em contato com o administrador." }, { status: 403 });
     }
     if (account.status === "pendente") {
       return NextResponse.json({ error: "Conta criada e aguardando liberação do administrador." }, { status: 403 });

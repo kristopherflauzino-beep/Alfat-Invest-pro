@@ -25,8 +25,8 @@ const statusLabels: Record<string, string> = {
   paid: "Pagamento confirmado",
   activated: "Conta ativada",
   rejected: "Pagamento recusado",
-  cancelled: "Cadastro cancelado",
-  expired: "Cadastro expirado"
+  cancelled: "Conta cancelada",
+  expired: "Prazo expirado"
 };
 const brl = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 
@@ -42,7 +42,7 @@ export function PendingRegistrationCheckout({ token }: { token: string }) {
     if (!token) throw new Error("Link de continuação inválido.");
     const response = await fetch("/api/auth/register/status?token=" + encodeURIComponent(token), { cache: "no-store" });
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.error || "Não foi possível consultar o cadastro.");
+    if (!response.ok) throw new Error(body.error || "Não foi possível consultar sua conta.");
     setRegistration(body.registration);
   }, [token]);
 
@@ -91,7 +91,7 @@ export function PendingRegistrationCheckout({ token }: { token: string }) {
     }
   }
 
-  if (loading) return <div className="flex items-center gap-2 text-sm"><LoaderCircle className="h-5 w-5 animate-spin" />Carregando cadastro...</div>;
+  if (loading) return <div className="flex items-center gap-2 text-sm"><LoaderCircle className="h-5 w-5 animate-spin" />Carregando sua conta...</div>;
   if (error && !registration) return <div className="space-y-4"><p className="rounded-2xl bg-red-500/10 p-4 text-sm font-semibold text-red-800 dark:text-red-200">{error}</p><Link href="/" className="block text-center font-bold text-cyan-600 dark:text-cyan-300">Voltar ao início</Link></div>;
   if (!registration) return null;
 

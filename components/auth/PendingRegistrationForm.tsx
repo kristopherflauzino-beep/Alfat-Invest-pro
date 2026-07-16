@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, Eye, EyeOff, MailCheck, ShieldCheck } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 export type PublicRegistrationPayload = {
   name: string;
@@ -17,6 +17,12 @@ export type PublicRegistrationPayload = {
   acceptMarketing: boolean;
 };
 
+export type PublicRegistrationResult = {
+  ok: boolean;
+  message: string;
+  emailStatus?: string;
+};
+
 type Plan = { id: string; name: string; value: number; durationDays: number; status: string; permissions: string[] };
 const brl = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 const stages = ["Dados", "Plano", "E-mail", "Pagamento", "Ativação"];
@@ -30,7 +36,7 @@ export function PendingRegistrationForm({
   plans: Plan[];
   message: string;
   databaseError: string;
-  onRegister: (payload: PublicRegistrationPayload) => Promise<void>;
+  onRegister: (payload: PublicRegistrationPayload) => Promise<PublicRegistrationResult>;
 }) {
   const activePlans = useMemo(() => plans.filter((plan) => plan.status === "ativo"), [plans]);
   const [planId, setPlanId] = useState(activePlans[0]?.id || "");
@@ -41,6 +47,13 @@ export function PendingRegistrationForm({
   const [registrationEmail, setRegistrationEmail] = useState("");
   const [resending, setResending] = useState(false);
   const [resendMessage, setResendMessage] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+
+  useEffect(() => {
+    if (activePlans.length > 0 && !activePlans.some((plan) => plan.id === planId)) {
+      setPlanId(activePlans[0].id);
+    }
+  }, [activePlans, planId]);
   const requirements = [
     { label: "Mínimo de 12 caracteres", valid: password.length >= 12 },
     { label: "Letra", valid: /[A-Za-z]/.test(password) },
@@ -55,7 +68,7 @@ export function PendingRegistrationForm({
     setRegistrationEmail(email);
     setLoading(true);
     try {
-      await onRegister({
+      const result = await onRegister({
         name: String(form.get("name") || ""),
         username: String(form.get("username") || ""),
         email,
@@ -68,6 +81,7 @@ export function PendingRegistrationForm({
         acceptPrivacy: true,
         acceptMarketing: form.get("acceptMarketing") === "on"
       });
+      if (result.ok) setSubmitted(true);
     } finally {
       setLoading(false);
     }
@@ -84,24 +98,38 @@ export function PendingRegistrationForm({
         body: JSON.stringify({ email: registrationEmail })
       });
       const body = await response.json().catch(() => ({}));
-      setResendMessage(body.message || "Se existir um cadastro pendente, enviaremos uma nova confirmação.");
+      setResendMessage(body.message || "Se existir uma conta pendente, enviaremos uma nova confirmação.");
     } catch {
       setResendMessage("Não foi possível solicitar o reenvio agora.");
     } finally {
       setResending(false);
     }
   }
+
+  if (submitted) {
+    return (
+      <div className="grid gap-5">
+        <Progress activeSteps={3} />
+        <div className="rounded-3xl border border-cyan-400/40 bg-cyan-500/10 p-5">
+          <MailCheck className="h-8 w-8 text-cyan-600 dark:text-cyan-300" />
+          <h2 className="mt-3 text-xl font-black">Verifique seu e-mail</h2>
+          <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+            Enviamos a confirmação para <strong>{registrationEmail}</strong>. Sua conta já existe, mas permanece sem acesso até a confirmação do e-mail e do pagamento.
+          </p>
+        </div>
+        {message && <p className="rounded-2xl bg-slate-100 p-4 text-sm font-semibold text-slate-700 dark:bg-white/5 dark:text-slate-200">{message}</p>}
+        <button type="button" onClick={() => void resendConfirmation()} disabled={resending} className="min-h-12 rounded-2xl border border-cyan-500 px-4 font-black text-cyan-700 disabled:opacity-50 dark:text-cyan-200">
+          {resending ? "Reenviando..." : "Reenviar confirmação"}
+        </button>
+        {resendMessage && <p className="rounded-xl bg-emerald-500/10 p-3 text-sm font-semibold text-emerald-800 dark:text-emerald-200">{resendMessage}</p>}
+        <a href="/" className="block text-center text-sm font-black text-cyan-700 dark:text-cyan-300">Voltar ao login</a>
+      </div>
+    );
+  }
+
   return (
     <form onSubmit={submit} className="grid gap-4">
-      <ol className="grid grid-cols-5 gap-1" aria-label="Etapas do cadastro">
-        {stages.map((stage, index) => (
-          <li key={stage} className={"min-w-0 rounded-xl px-0.5 py-2 text-center text-[9px] font-black sm:px-1 sm:text-xs " + (index < 2 ? "bg-cyan-500 text-white" : "bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300")}>
-            <span className="block">{index + 1}</span>
-            <span className="block break-words">{stage}</span>
-          </li>
-        ))}
-      </ol>
-
+      <Progress activeSteps={2} />
       <div className="grid gap-3 sm:grid-cols-2">
         <Field name="name" label="Nome completo" placeholder="Seu nome completo" autoComplete="name" required />
         <Field name="username" label="Nome de usuário" placeholder="seu.usuario" autoComplete="username" required />
@@ -145,16 +173,27 @@ export function PendingRegistrationForm({
 
       <div className="rounded-2xl bg-blue-500/10 p-3 text-xs leading-5 text-blue-800 dark:text-blue-200">
         <ShieldCheck className="mr-2 inline h-4 w-4" />
-        Primeiro enviaremos a confirmação do e-mail. A conta só será criada após a conferência manual do pagamento pelo administrador.
+        A conta será criada sem acesso. A liberação ocorrerá somente após a confirmação do e-mail e do pagamento.
       </div>
       {message && <div className="rounded-2xl bg-cyan-500/10 p-4 text-sm font-semibold text-cyan-800 dark:text-cyan-200"><MailCheck className="mr-2 inline h-5 w-5" />{message}</div>}
-      {message && registrationEmail && <button type="button" onClick={() => void resendConfirmation()} disabled={resending} className="min-h-11 rounded-xl border border-cyan-500 px-4 text-sm font-black text-cyan-700 disabled:opacity-50 dark:text-cyan-200">{resending ? "Reenviando..." : "Reenviar confirmação"}</button>}
-      {resendMessage && <p className="rounded-xl bg-slate-100 p-3 text-xs font-semibold text-slate-700 dark:bg-white/5 dark:text-slate-200">{resendMessage}</p>}
       {databaseError && <div className="rounded-2xl bg-amber-500/10 p-4 text-sm font-semibold text-amber-800 dark:text-amber-200">{databaseError}</div>}
-      <button disabled={loading || Boolean(databaseError) || activePlans.length === 0} className="min-h-12 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 px-5 font-black text-white disabled:opacity-50">
-        {loading ? "Criando cadastro provisório..." : "Continuar e confirmar e-mail"}
+      <button disabled={loading || Boolean(databaseError) || activePlans.length === 0 || !planId} className="min-h-12 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 px-5 font-black text-white disabled:opacity-50">
+        {loading ? "Criando conta..." : "Criar conta e confirmar e-mail"}
       </button>
     </form>
+  );
+}
+
+function Progress({ activeSteps }: { activeSteps: number }) {
+  return (
+    <ol className="grid grid-cols-5 gap-1" aria-label="Etapas do cadastro">
+      {stages.map((stage, index) => (
+        <li key={stage} className={"min-w-0 rounded-xl px-0.5 py-2 text-center text-[9px] font-black sm:px-1 sm:text-xs " + (index < activeSteps ? "bg-cyan-500 text-white" : "bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300")}>
+          <span className="block">{index + 1}</span>
+          <span className="block break-words">{stage}</span>
+        </li>
+      ))}
+    </ol>
   );
 }
 

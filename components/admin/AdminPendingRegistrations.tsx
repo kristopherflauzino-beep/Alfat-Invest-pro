@@ -53,7 +53,7 @@ export function AdminPendingRegistrations() {
   const load = useCallback(async () => {
     const response = await fetch("/api/admin/pending-registrations", { cache: "no-store" });
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.error || "Não foi possível carregar os cadastros provisórios.");
+    if (!response.ok) throw new Error(body.error || "Não foi possível carregar as contas em ativação.");
     const values = (body.registrations || []) as Item[];
     setItems(values);
     setDrafts((current) => Object.fromEntries(values.map((item) => [item.id, current[item.id] || {
@@ -113,7 +113,7 @@ export function AdminPendingRegistrations() {
   }
 
   return <section className="mb-6 space-y-4 rounded-3xl border border-slate-200 bg-white p-5 dark:border-white/10 dark:bg-slate-950">
-    <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-lg font-black">Cadastros aguardando pagamento</h3><p className="text-sm text-slate-500 dark:text-slate-300">A conta só é criada após confirmar o pagamento e ativar manualmente.</p></div><button type="button" onClick={() => void load()} className="rounded-xl bg-slate-950 p-3 text-white dark:bg-white dark:text-slate-950" aria-label="Atualizar cadastros"><RefreshCw className="h-4 w-4" /></button></div>
+    <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-lg font-black">Contas aguardando confirmação</h3><p className="text-sm text-slate-500 dark:text-slate-300">A conta já existe sem acesso. O acesso é liberado somente após confirmar o pagamento e ativar manualmente.</p></div><button type="button" onClick={() => void load()} className="rounded-xl bg-slate-950 p-3 text-white dark:bg-white dark:text-slate-950" aria-label="Atualizar cadastros"><RefreshCw className="h-4 w-4" /></button></div>
     {error && <p className="rounded-xl bg-red-500/10 p-3 text-sm font-semibold text-red-800 dark:text-red-200">{error}</p>}
     {message && <p className="rounded-xl bg-emerald-500/10 p-3 text-sm font-semibold text-emerald-800 dark:text-emerald-200">{message}</p>}
     <div className="space-y-3">
@@ -140,7 +140,7 @@ export function AdminPendingRegistrations() {
           </div>
         </article>;
       })}
-      {operational.length === 0 && <p className="rounded-2xl bg-slate-100 p-4 text-sm text-slate-500 dark:bg-white/5 dark:text-slate-300"><Clock3 className="mr-2 inline h-4 w-4" />Nenhum cadastro provisório aguardando ação.</p>}
+      {operational.length === 0 && <p className="rounded-2xl bg-slate-100 p-4 text-sm text-slate-500 dark:bg-white/5 dark:text-slate-300"><Clock3 className="mr-2 inline h-4 w-4" />Nenhuma conta aguardando confirmação ou ativação.</p>}
     </div>
   </section>;
 }

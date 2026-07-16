@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { hashPassword, passwordPolicy } from "@/lib/auth/password";
+import { hashPassword, passwordPolicy, verifyPassword } from "@/lib/auth/password";
 import { hashRateLimitValue } from "@/lib/auth/password-reset";
 import {
   EMAIL_VERIFICATION_TTL_MS,
@@ -63,24 +63,186 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Muitas tentativas de cadastro. Aguarde antes de tentar novamente." }, { status: 429, headers: { "Retry-After": "3600" } });
     }
 
-    const pending = (Array.isArray(state.pendingRegistrations) ? state.pendingRegistrations : []).filter(isPendingRegistration);
-    const activePending = pending.filter((item) => pendingRegistrationState(item, now.getTime()) !== "expired");
-    if (state.accounts.some((item) => item.email.toLowerCase() === email || item.username.toLowerCase() === username)) {
-      return NextResponse.json({ error: "E-mail ou nome de usuário já cadastrado." }, { status: 409 });
+    const workflows = (Array.isArray(state.pendingRegistrations) ? state.pendingRegistrations : []).filter(isPendingRegistration);
+    const activeWorkflows = workflows.filter((item) => pendingRegistrationState(item, now.getTime()) !== "expired");
+    const existingAccountIndex = state.accounts.findIndex((item) => item.email.toLowerCase() === email || item.username.toLowerCase() === username);
+    const existingAccount = state.accounts[existingAccountIndex];
+    if (existingAccount) {
+      const workflowIndex = workflows.findIndex((item) =>
+        item.userId === existingAccount.id ||
+        item.id === existingAccount.registrationWorkflowId
+      );
+      const workflow = workflows[workflowIndex];
+      const canResume = existingAccount.email.toLowerCase() === email &&
+        existingAccount.username.toLowerCase() === username &&
+        existingAccount.registrationStatus === "awaiting_email_confirmation" &&
+        workflow?.status === "awaiting_email_confirmation" &&
+        pendingRegistrationState(workflow, now.getTime()) !== "expired" &&
+        await verifyPassword(input.password, existingAccount.passwordHash);
+
+      if (!canResume) {
+        return NextResponse.json({ error: "E-mail ou nome de usuário já cadastrado. Entre na conta ou solicite o reenvio da confirmação." }, { status: 409 });
+      }
+
+      const generated = createEmailVerificationToken();
+      const tokenRecord: EmailVerificationTokenRecord = {
+        id: crypto.randomUUID(),
+        pendingRegistrationId: workflow.id,
+        tokenHash: generated.tokenHash,
+        expiresAt: new Date(now.getTime() + EMAIL_VERIFICATION_TTL_MS).toISOString(),
+        requestedAt: now.toISOString(),
+        createdAt: now.toISOString()
+      };
+      const expiresAt = new Date(now.getTime() + PENDING_REGISTRATION_TTL_MS).toISOString();
+      workflows[workflowIndex] = { ...workflow, expiresAt, updatedAt: now.toISOString() };
+      const tokens = (Array.isArray(state.emailVerificationTokens) ? state.emailVerificationTokens : []).filter(isEmailVerificationToken);
+      state.pendingRegistrations = workflows;
+      state.emailVerificationTokens = [
+        tokenRecord,
+        ...tokens.map((item) =>
+          item.pendingRegistrationId === workflow.id && !item.usedAt ? { ...item, usedAt: now.toISOString() } : item
+        )
+      ].slice(0, 5000);
+      state.accounts[existingAccountIndex] = { ...existingAccount, registrationExpiresAt: expiresAt };
+      const rateEvent: EmailVerificationRateEvent = { id: crypto.randomUUID(), pendingRegistrationId: workflow.id, emailHash, ipHash, createdAt: now.toISOString() };
+      state.emailVerificationRateEvents = [rateEvent, ...rateEvents].slice(0, 5000);
+      state.auditLogs = [{
+        id: crypto.randomUUID(),
+        action: "confirmacao_email_retentada",
+        userId: existingAccount.id,
+        userName: existingAccount.name,
+        details: "A criação da conta foi retomada e um novo e-mail de confirmação foi solicitado.",
+        origin: "public_registration",
+        result: "awaiting_email_confirmation",
+        createdAt: now.toISOString(),
+        risk: "baixo"
+      }, ...(state.auditLogs || [])];
+      await writeCoreState(state);
+
+      const confirmationUrl = officialAppUrl() + "/confirmar-email?token=" + encodeURIComponent(generated.token);
+      const template = registrationConfirmationEmail({ name: workflow.name, confirmationUrl, planName: workflow.planName });
+      const delivery = await sendEmail({
+        to: workflow.email,
+        ...template,
+        userId: existingAccount.id,
+        type: "registration_confirmation_retry",
+        idempotencyKey: "registration-confirmation-retry:" + tokenRecord.id
+      });
+      return NextResponse.json({
+        ok: true,
+        userId: existingAccount.id,
+        email,
+        emailStatus: delivery.status,
+        message: delivery.sent
+          ? "Sua conta já estava criada. Enviamos uma nova confirmação para o seu e-mail."
+          : "Sua conta já existe, mas o e-mail ainda não foi entregue. Use a opção de reenviar confirmação."
+      }, { status: 202, headers: { "Cache-Control": "no-store" } });
     }
-    if (activePending.some((item) => item.email === email || item.username === username)) {
-      return NextResponse.json({ error: "Já existe um cadastro provisório para este e-mail ou usuário. Use a opção de reenviar confirmação." }, { status: 409 });
+    const legacyWorkflowIndex = workflows.findIndex((item) =>
+      pendingRegistrationState(item, now.getTime()) !== "expired" &&
+      (item.email === email || item.username === username)
+    );
+    if (legacyWorkflowIndex >= 0) {
+      const workflow = workflows[legacyWorkflowIndex];
+      const validOwner = workflow.email === email &&
+        workflow.username === username &&
+        await verifyPassword(input.password, workflow.passwordHash);
+      if (!validOwner) {
+        return NextResponse.json({ error: "E-mail ou nome de usuário já cadastrado. Solicite o reenvio da confirmação." }, { status: 409 });
+      }
+
+      const accountId = crypto.randomUUID();
+      const expiresAt = new Date(now.getTime() + PENDING_REGISTRATION_TTL_MS).toISOString();
+      workflows[legacyWorkflowIndex] = { ...workflow, userId: accountId, expiresAt, updatedAt: now.toISOString() };
+      state.accounts = [{
+        id: accountId,
+        role: "CLIENTE",
+        username: workflow.username,
+        email: workflow.email,
+        name: workflow.name,
+        phone: workflow.phone,
+        passwordHash: workflow.passwordHash,
+        planId: workflow.planId,
+        planValue: workflow.planPriceInCents / 100,
+        status: "pendente",
+        permissions: workflow.permissions,
+        registrationStatus: "awaiting_email_confirmation",
+        registrationWorkflowId: workflow.id,
+        registrationExpiresAt: expiresAt,
+        selectedPlanName: workflow.planName,
+        selectedPlanDurationDays: workflow.durationDays,
+        acceptedTermsAt: workflow.acceptedTermsAt,
+        acceptedPrivacyAt: workflow.acceptedPrivacyAt,
+        acceptedMarketingAt: workflow.acceptedMarketingAt,
+        createdAt: workflow.createdAt
+      }, ...state.accounts];
+
+      const generated = createEmailVerificationToken();
+      const tokenRecord: EmailVerificationTokenRecord = {
+        id: crypto.randomUUID(),
+        pendingRegistrationId: workflow.id,
+        tokenHash: generated.tokenHash,
+        expiresAt: new Date(now.getTime() + EMAIL_VERIFICATION_TTL_MS).toISOString(),
+        requestedAt: now.toISOString(),
+        createdAt: now.toISOString()
+      };
+      const tokens = (Array.isArray(state.emailVerificationTokens) ? state.emailVerificationTokens : []).filter(isEmailVerificationToken);
+      state.pendingRegistrations = workflows;
+      state.emailVerificationTokens = [
+        tokenRecord,
+        ...tokens.map((item) =>
+          item.pendingRegistrationId === workflow.id && !item.usedAt ? { ...item, usedAt: now.toISOString() } : item
+        )
+      ].slice(0, 5000);
+      const rateEvent: EmailVerificationRateEvent = { id: crypto.randomUUID(), pendingRegistrationId: workflow.id, emailHash, ipHash, createdAt: now.toISOString() };
+      state.emailVerificationRateEvents = [rateEvent, ...rateEvents].slice(0, 5000);
+      state.auditLogs = [{
+        id: crypto.randomUUID(),
+        action: "conta_pendente_migrada",
+        userId: accountId,
+        userName: workflow.name,
+        details: "Registro anterior convertido em conta real bloqueada; nova confirmação de e-mail solicitada.",
+        origin: "public_registration",
+        result: "awaiting_email_confirmation",
+        createdAt: now.toISOString(),
+        risk: "baixo"
+      }, ...(state.auditLogs || [])];
+      await writeCoreState(state);
+
+      const confirmationUrl = officialAppUrl() + "/confirmar-email?token=" + encodeURIComponent(generated.token);
+      const template = registrationConfirmationEmail({ name: workflow.name, confirmationUrl, planName: workflow.planName });
+      const delivery = await sendEmail({
+        to: workflow.email,
+        ...template,
+        userId: accountId,
+        type: "registration_confirmation_migrated",
+        idempotencyKey: "registration-confirmation-migrated:" + tokenRecord.id
+      });
+      return NextResponse.json({
+        ok: true,
+        userId: accountId,
+        email,
+        emailStatus: delivery.status,
+        message: delivery.sent
+          ? "Sua conta foi atualizada. Enviamos uma nova confirmação para o seu e-mail."
+          : "Sua conta foi atualizada, mas o e-mail ainda não foi entregue. Use a opção de reenviar confirmação."
+      }, { status: 202, headers: { "Cache-Control": "no-store" } });
     }
     const plan = state.plans.find((item) => item.id === input.planId && item.status === "ativo");
     if (!plan) return NextResponse.json({ error: "Plano indisponível." }, { status: 422 });
 
+    const accountId = crypto.randomUUID();
+    const workflowId = crypto.randomUUID();
+    const passwordHash = await hashPassword(input.password);
+    const expiresAt = new Date(now.getTime() + PENDING_REGISTRATION_TTL_MS).toISOString();
     const registration: PendingRegistration = {
-      id: crypto.randomUUID(),
+      id: workflowId,
+      userId: accountId,
       name: input.name,
       username,
       email,
       phone: input.phone,
-      passwordHash: await hashPassword(input.password),
+      passwordHash,
       acceptedTermsAt: now.toISOString(),
       acceptedPrivacyAt: now.toISOString(),
       acceptedMarketingAt: input.acceptMarketing ? now.toISOString() : undefined,
@@ -91,14 +253,37 @@ export async function POST(request: Request) {
       permissions: plan.permissions,
       status: "awaiting_email_confirmation",
       paymentProvider: "mercado_pago",
-      expiresAt: new Date(now.getTime() + PENDING_REGISTRATION_TTL_MS).toISOString(),
+      expiresAt,
       createdAt: now.toISOString(),
       updatedAt: now.toISOString()
     };
+    state.accounts = [{
+      id: accountId,
+      role: "CLIENTE",
+      username,
+      email,
+      name: input.name,
+      phone: input.phone,
+      passwordHash,
+      planId: plan.id,
+      planValue: registration.planPriceInCents / 100,
+      status: "pendente",
+      permissions: plan.permissions,
+      registrationStatus: "awaiting_email_confirmation",
+      registrationWorkflowId: workflowId,
+      registrationExpiresAt: expiresAt,
+      selectedPlanName: plan.name,
+      selectedPlanDurationDays: plan.durationDays,
+      acceptedTermsAt: registration.acceptedTermsAt,
+      acceptedPrivacyAt: registration.acceptedPrivacyAt,
+      acceptedMarketingAt: registration.acceptedMarketingAt,
+      createdAt: now.toISOString()
+    }, ...state.accounts];
+
     const generated = createEmailVerificationToken();
     const tokenRecord: EmailVerificationTokenRecord = {
       id: crypto.randomUUID(),
-      pendingRegistrationId: registration.id,
+      pendingRegistrationId: workflowId,
       tokenHash: generated.tokenHash,
       expiresAt: new Date(now.getTime() + EMAIL_VERIFICATION_TTL_MS).toISOString(),
       requestedAt: now.toISOString(),
@@ -107,17 +292,17 @@ export async function POST(request: Request) {
     const tokens = (Array.isArray(state.emailVerificationTokens) ? state.emailVerificationTokens : []).filter(isEmailVerificationToken);
     state.pendingRegistrations = [
       registration,
-      ...pending.map((item) => pendingRegistrationState(item, now.getTime()) === "expired" && item.status !== "expired" ? { ...item, status: "expired", updatedAt: now.toISOString() } : item)
+      ...workflows.map((item) => pendingRegistrationState(item, now.getTime()) === "expired" && item.status !== "expired" ? { ...item, status: "expired", updatedAt: now.toISOString() } : item)
     ].slice(0, 5000);
     state.emailVerificationTokens = [tokenRecord, ...tokens].slice(0, 5000);
-    const rateEvent: EmailVerificationRateEvent = { id: crypto.randomUUID(), pendingRegistrationId: registration.id, emailHash, ipHash, createdAt: now.toISOString() };
+    const rateEvent: EmailVerificationRateEvent = { id: crypto.randomUUID(), pendingRegistrationId: workflowId, emailHash, ipHash, createdAt: now.toISOString() };
     state.emailVerificationRateEvents = [rateEvent, ...rateEvents].slice(0, 5000);
     state.auditLogs = [{
       id: crypto.randomUUID(),
-      action: "cadastro_provisorio_criado",
-      userId: registration.id,
-      userName: registration.name,
-      details: "Cadastro provisório criado para o plano " + plan.name + "; aguardando confirmação de e-mail.",
+      action: "conta_criada_aguardando_email",
+      userId: accountId,
+      userName: input.name,
+      details: "Conta criada sem acesso para o plano " + plan.name + "; aguardando confirmação de e-mail.",
       origin: "public_registration",
       result: "awaiting_email_confirmation",
       createdAt: now.toISOString(),
@@ -126,21 +311,22 @@ export async function POST(request: Request) {
     await writeCoreState(state);
 
     const confirmationUrl = officialAppUrl() + "/confirmar-email?token=" + encodeURIComponent(generated.token);
-    const template = registrationConfirmationEmail({ name: registration.name, confirmationUrl, planName: plan.name });
+    const template = registrationConfirmationEmail({ name: input.name, confirmationUrl, planName: plan.name });
     const delivery = await sendEmail({
       to: email,
       ...template,
-      userId: registration.id,
+      userId: accountId,
       type: "registration_confirmation",
       idempotencyKey: "registration-confirmation:" + tokenRecord.id
     });
     return NextResponse.json({
       ok: true,
-      pendingRegistrationId: registration.id,
+      userId: accountId,
+      email,
       emailStatus: delivery.status,
       message: delivery.sent
-        ? "Cadastro provisório criado. Verifique seu e-mail para continuar."
-        : "Cadastro provisório criado, mas o e-mail ainda não foi entregue. Use a opção de reenviar confirmação."
+        ? "Conta criada. Enviamos a confirmação para o seu e-mail."
+        : "Conta criada e bloqueada, mas o e-mail ainda não foi entregue. Use a opção de reenviar confirmação."
     }, { status: 201, headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return requestErrorResponse(error);

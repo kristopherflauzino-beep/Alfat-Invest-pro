@@ -34,10 +34,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     const registrations = (Array.isArray(state.pendingRegistrations) ? state.pendingRegistrations : []).filter(isPendingRegistration);
     const index = registrations.findIndex((item) => item.id === id);
     const current = registrations[index];
-    if (!current) return NextResponse.json({ error: "Cadastro provisório não encontrado." }, { status: 404 });
+    if (!current) return NextResponse.json({ error: "Conta em processo de ativação não encontrada." }, { status: 404 });
     const effectiveStatus = pendingRegistrationState(current);
     if (effectiveStatus === "expired" && data.action !== "add_note") {
-      return NextResponse.json({ error: "Este cadastro provisório expirou." }, { status: 409 });
+      return NextResponse.json({ error: "O prazo desta conta pendente expirou." }, { status: 409 });
     }
     if (data.action === "confirm_payment" && !["awaiting_payment", "payment_under_review"].includes(current.status)) {
       return NextResponse.json({ error: "O cadastro não está disponível para confirmação de pagamento." }, { status: 409 });
@@ -68,7 +68,14 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       transactionId: data.transactionId || current.transactionId,
       updatedAt: now.toISOString()
     };
-    let activatedAccountId = "";
+    const linkedAccountIndex = state.accounts.findIndex((item) =>
+      current.userId
+        ? item.id === current.userId
+        : item.registrationWorkflowId === current.id ||
+          (item.status === "pendente" && (item.email.toLowerCase() === current.email || item.username.toLowerCase() === current.username))
+    );
+    const linkedAccount = linkedAccountIndex >= 0 ? state.accounts[linkedAccountIndex] : undefined;
+    let activatedAccountId = linkedAccount?.id || current.userId || "";
     if (data.action === "confirm_payment") {
       updated = {
         ...updated,
@@ -82,16 +89,30 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
     if (data.action === "activate") {
       if (!current.emailVerifiedAt) return NextResponse.json({ error: "O e-mail ainda não foi confirmado." }, { status: 409 });
-      if (state.accounts.some((item) => item.email.toLowerCase() === current.email || item.username.toLowerCase() === current.username)) {
-        return NextResponse.json({ error: "Já existe uma conta com este e-mail ou nome de usuário." }, { status: 409 });
+      const duplicate = state.accounts.some((item, accountIndex) =>
+        accountIndex !== linkedAccountIndex &&
+        (item.email.toLowerCase() === current.email || item.username.toLowerCase() === current.username)
+      );
+      if (duplicate) {
+        return NextResponse.json({ error: "Já existe outra conta com este e-mail ou nome de usuário." }, { status: 409 });
       }
       const plan = state.plans.find((item) => item.id === current.planId && item.status === "ativo");
       if (!plan) return NextResponse.json({ error: "O plano selecionado não está mais ativo." }, { status: 409 });
-      const accountId = crypto.randomUUID();
+      const accountId = linkedAccount?.id || current.userId || crypto.randomUUID();
       activatedAccountId = accountId;
-      state.accounts = [{
-        id: accountId,
-        role: "CLIENTE",
+      const activatedAccount = {
+        ...(linkedAccount || {
+          id: accountId,
+          role: "CLIENTE" as const,
+          username: current.username,
+          email: current.email,
+          name: current.name,
+          phone: current.phone,
+          passwordHash: current.passwordHash,
+          permissions: current.permissions,
+          createdAt: now.toISOString()
+        }),
+        role: "CLIENTE" as const,
         username: current.username,
         email: current.email,
         name: current.name,
@@ -104,8 +125,14 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
         planStartedAt: data.startDate,
         emailVerifiedAt: current.emailVerifiedAt,
         permissions: current.permissions.length > 0 ? current.permissions : plan.permissions,
-        createdAt: now.toISOString()
-      }, ...state.accounts];
+        registrationStatus: "activated",
+        registrationWorkflowId: current.id,
+        paymentConfirmedAt: current.paymentConfirmedAt,
+        activatedAt: now.toISOString()
+      };
+      if (linkedAccountIndex >= 0) state.accounts[linkedAccountIndex] = activatedAccount;
+      else state.accounts = [activatedAccount, ...state.accounts];
+
       const payments = Array.isArray(state.payments) ? state.payments : [];
       state.payments = [{
         id: "registration-" + current.id,
@@ -124,17 +151,24 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
         createdAt: now.toISOString()
       }, ...payments];
       updated = { ...updated, status: "activated", activatedAt: now.toISOString() };
+    } else if (linkedAccountIndex >= 0 && ["confirm_payment", "reject", "cancel"].includes(data.action)) {
+      state.accounts[linkedAccountIndex] = {
+        ...state.accounts[linkedAccountIndex],
+        registrationStatus: updated.status,
+        paymentConfirmedAt: updated.paymentConfirmedAt,
+        transactionId: updated.transactionId,
+        status: ["reject", "cancel"].includes(data.action) ? "bloqueado" : state.accounts[linkedAccountIndex].status
+      };
     }
-
     registrations[index] = updated;
     state.pendingRegistrations = registrations;
     state.auditLogs = [{
       id: crypto.randomUUID(),
-      action: "cadastro_provisorio_" + data.action,
+      action: "conta_cadastro_" + data.action,
       userId: admin.id,
       userName: admin.name,
       targetUserId: activatedAccountId || current.id,
-      details: "Cadastro provisório " + current.id + " alterado de " + current.status + " para " + updated.status + ".",
+      details: "Conta em ativação " + current.id + " alterada de " + current.status + " para " + updated.status + ".",
       createdAt: now.toISOString(),
       risk: ["confirm_payment", "activate", "reject"].includes(data.action) ? "alto" : "medio"
     }, ...(state.auditLogs || [])];

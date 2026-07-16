@@ -34,9 +34,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const registrations = (Array.isArray(state.pendingRegistrations) ? state.pendingRegistrations : []).filter(isPendingRegistration);
     const registrationIndex = registrations.findIndex((item) => item.id === id);
     const registration = registrations[registrationIndex];
-    if (!registration) return NextResponse.json({ error: "Cadastro provisório não encontrado." }, { status: 404 });
+    if (!registration) return NextResponse.json({ error: "Conta em processo de ativação não encontrada." }, { status: 404 });
     if (pendingRegistrationState(registration) === "expired") {
-      return NextResponse.json({ error: "O cadastro provisório expirou." }, { status: 410 });
+      return NextResponse.json({ error: "O prazo da conta pendente expirou." }, { status: 410 });
     }
     if (registration.status !== "awaiting_email_confirmation") {
       return NextResponse.json({ error: "O e-mail deste cadastro já foi confirmado ou o cadastro foi encerrado." }, { status: 409 });
@@ -77,13 +77,26 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       updatedAt: now.toISOString()
     };
     state.pendingRegistrations = registrations;
+    const accountIndex = state.accounts.findIndex((item) =>
+      item.id === registration.userId ||
+      item.email.toLowerCase() === registration.email ||
+      item.username.toLowerCase() === registration.username
+    );
+    const accountId = accountIndex >= 0 ? state.accounts[accountIndex].id : registration.userId || registration.id;
+    if (accountIndex >= 0) {
+      state.accounts[accountIndex] = {
+        ...state.accounts[accountIndex],
+        registrationStatus: "awaiting_email_confirmation",
+        registrationExpiresAt: registrations[registrationIndex].expiresAt
+      };
+    }
     state.auditLogs = [{
       id: crypto.randomUUID(),
       action: "confirmacao_email_cadastro_reenviada",
       userId: admin.id,
       userName: admin.name,
       targetUserId: registration.id,
-      details: "Administrador solicitou novo e-mail de confirmação para o cadastro provisório.",
+      details: "Administrador solicitou novo e-mail de confirmação para a conta pendente.",
       createdAt: now.toISOString(),
       risk: "baixo"
     }, ...(state.auditLogs || [])];
@@ -94,7 +107,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const delivery = await sendEmail({
       to: registration.email,
       ...template,
-      userId: registration.id,
+      userId: accountId,
       type: "registration_confirmation_admin_resend",
       idempotencyKey: "registration-confirmation-admin-resend:" + token.id
     });

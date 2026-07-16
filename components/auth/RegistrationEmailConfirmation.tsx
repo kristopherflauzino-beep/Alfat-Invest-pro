@@ -42,7 +42,7 @@ export function RegistrationEmailConfirmation({ token }: { token: string }) {
   }
 
   return <div className="space-y-4">
-    <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">Confirme o endereço para continuar. Isso ainda não cria nem ativa sua conta.</p>
+    <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">Confirme o endereço para continuar. Sua conta já existe, mas permanece sem acesso até a confirmação do pagamento.</p>
     {error && <p className="rounded-2xl bg-red-500/10 p-4 text-sm font-semibold text-red-800 dark:text-red-200">{error}</p>}
     <button type="button" onClick={confirm} disabled={loading || !token} className="flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-cyan-500 px-4 font-black text-white disabled:opacity-50">
       {loading ? <LoaderCircle className="h-5 w-5 animate-spin" /> : <MailCheck className="h-5 w-5" />}

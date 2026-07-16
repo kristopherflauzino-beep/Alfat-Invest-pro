@@ -139,7 +139,7 @@ import { NotificationBell } from "@/components/notifications/NotificationBell";
 import { NotificationCenter } from "@/components/notifications/NotificationCenter";
 import { ReportCenter } from "@/components/reports/ReportCenter";
 import { EmailHealthPanel } from "@/components/admin/EmailHealthPanel";
-import { PendingRegistrationForm, type PublicRegistrationPayload } from "@/components/auth/PendingRegistrationForm";
+import { PendingRegistrationForm, type PublicRegistrationPayload, type PublicRegistrationResult } from "@/components/auth/PendingRegistrationForm";
 import { AdminPendingRegistrations } from "@/components/admin/AdminPendingRegistrations";
 import { AdminIdentityEditor } from "@/components/account/AdminIdentityEditor";
 import { ChangeEmailForm } from "@/components/account/ChangeEmailForm";
@@ -965,7 +965,7 @@ export default function AlfatecInvestPro() {
     }
   }
 
-  async function requestAccount(payload: PublicRegistrationPayload) {
+  async function requestAccount(payload: PublicRegistrationPayload): Promise<PublicRegistrationResult> {
     setRegisterMessage("");
     setLoginError("");
     try {
@@ -975,13 +975,20 @@ export default function AlfatecInvestPro() {
         body: JSON.stringify(payload)
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data?.error ?? "Nao foi possivel criar a conta.");
-      setRegisterMessage(data.message ?? "Cadastro provisório criado. Verifique seu e-mail para continuar.");
+      if (!response.ok) {
+        const failure = data?.error ?? "Não foi possível criar a conta.";
+        setRegisterMessage(failure);
+        return { ok: false, message: failure };
+      }
+      const success = data.message ?? "Conta criada. Verifique seu e-mail para continuar.";
+      setRegisterMessage(success);
+      return { ok: true, message: success, emailStatus: data.emailStatus };
     } catch (error) {
-      setRegisterMessage(error instanceof Error ? error.message : "Nao foi possivel criar a conta.");
+      const failure = error instanceof Error ? error.message : "Não foi possível criar a conta.";
+      setRegisterMessage(failure);
+      return { ok: false, message: failure };
     }
   }
-
   function logout() {
     void fetch("/api/auth/logout", { method: "POST" }).finally(() => {
       setSessionId(null);
@@ -1659,7 +1666,7 @@ function Shell({ darkMode, setDarkMode, logout, user, modules, activeId, onMenu,
   );
 }
 
-function LoginScreen({ darkMode, setDarkMode, loginUser, setLoginUser, loginPassword, setLoginPassword, showPassword, setShowPassword, loginError, registerMessage, databaseError, plans, stateLoaded, onSubmit, onRegister }: { darkMode: boolean; setDarkMode: (value: boolean) => void; loginUser: string; setLoginUser: (value: string) => void; loginPassword: string; setLoginPassword: (value: string) => void; showPassword: boolean; setShowPassword: (value: boolean) => void; loginError: string; registerMessage: string; databaseError: string; plans: Plan[]; stateLoaded: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onRegister: (payload: PublicRegistrationPayload) => Promise<void> }) {
+function LoginScreen({ darkMode, setDarkMode, loginUser, setLoginUser, loginPassword, setLoginPassword, showPassword, setShowPassword, loginError, registerMessage, databaseError, plans, stateLoaded, onSubmit, onRegister }: { darkMode: boolean; setDarkMode: (value: boolean) => void; loginUser: string; setLoginUser: (value: string) => void; loginPassword: string; setLoginPassword: (value: string) => void; showPassword: boolean; setShowPassword: (value: boolean) => void; loginError: string; registerMessage: string; databaseError: string; plans: Plan[]; stateLoaded: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onRegister: (payload: PublicRegistrationPayload) => Promise<PublicRegistrationResult> }) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const activePlans = plans.filter((plan) => plan.status === "ativo");
 
