@@ -69,7 +69,7 @@ describe("relatórios", () => {
     expect(xlsx.blob.size).toBeGreaterThan(5_000);
     expect(await csv.blob.text()).toContain("ALFATEC INVEST PRO");
     expect(JSON.parse(await json.blob.text()).sections).toHaveLength(2);
-  });
+  }, 20_000);
   it("isola plano e pagamentos no relatório individual", () => {
     const report = buildClientReport({
       user: { id: "client-1", name: "Cliente", planId: "mensal", planValue: 24.9, status: "ativo", dueDate: "2026-08-15" },

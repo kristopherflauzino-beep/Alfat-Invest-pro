@@ -153,7 +153,7 @@ function weightedAverage(scores: FiiScoreBreakdown, weights: FiiWeights) {
 }
 
 function dataSource(asset: Asset, label: string) {
-  if (asset.source === "external") return asset.sourceLabel ?? "Google Finance via provedor externo";
+  if (asset.source === "external") return asset.sourceLabel ?? "Provedor externo de dados financeiros";
   if (asset.source === "generated") return `${label}: cadastro dinamico sem dados validados`;
   return asset.sourceLabel ?? "Base interna/fornecedor cadastrado";
 }

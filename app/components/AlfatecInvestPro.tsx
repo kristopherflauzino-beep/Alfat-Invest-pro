@@ -25,9 +25,11 @@ import {
   LineChart as LineChartIcon,
   Lock,
   LogOut,
+  MailCheck,
   Menu,
   Moon,
   PieChart as PieChartIcon,
+  Pencil,
   Plus,
   Search,
   Settings,
@@ -44,7 +46,7 @@ import {
   WalletCards,
   X
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -68,6 +70,7 @@ import {
   createGeneratedAsset,
   generateAiNotes,
   getAsset,
+  inferAssetType,
   isTickerLike,
   localAssets,
   normalizeTicker,
@@ -93,7 +96,6 @@ import { GrahamComparison } from "@/components/valuation/GrahamComparison";
 import { GrahamExplanation } from "@/components/valuation/GrahamExplanation";
 import { GrahamGrowthCard } from "@/components/valuation/GrahamGrowthCard";
 import { GrahamNumberCard } from "@/components/valuation/GrahamNumberCard";
-import { GrahamOpportunityFilter } from "@/components/valuation/GrahamOpportunityFilter";
 import {
   analisarAlfatecFii,
   compararFiiPorSegmento,
@@ -123,9 +125,30 @@ import { CryptoOpportunityFilters, defaultCryptoOpportunityFilters, type CryptoO
 import { MercadoPagoLinkCheckout } from "@/components/subscriptions/MercadoPagoLinkCheckout";
 import { AdminSubscriptionRequests } from "@/components/subscriptions/AdminSubscriptionRequests";
 import { AlfatecPortfolioMethod } from "@/components/portfolio/AlfatecPortfolioMethod";
+import { CryptoQuantityInput } from "@/components/portfolio/CryptoQuantityInput";
+import { DecimalValueDisplay } from "@/components/portfolio/DecimalValueDisplay";
+import { PortfolioPositionEditor } from "@/components/portfolio/PortfolioPositionEditor";
+import {
+  CRYPTO_MAX_DECIMAL_PLACES,
+  decimalToNumber,
+  multiplyDecimalToNumber,
+  validateAssetQuantity,
+  validateDecimalInput
+} from "@/lib/decimal/crypto-quantity";
 import { NotificationBell } from "@/components/notifications/NotificationBell";
 import { NotificationCenter } from "@/components/notifications/NotificationCenter";
 import { ReportCenter } from "@/components/reports/ReportCenter";
+import { EmailHealthPanel } from "@/components/admin/EmailHealthPanel";
+import { PendingRegistrationForm, type PublicRegistrationPayload } from "@/components/auth/PendingRegistrationForm";
+import { AdminPendingRegistrations } from "@/components/admin/AdminPendingRegistrations";
+import { AdminIdentityEditor } from "@/components/account/AdminIdentityEditor";
+import { ChangeEmailForm } from "@/components/account/ChangeEmailForm";
+import { ChangeNameForm, type AccountIdentity } from "@/components/account/ChangeNameForm";
+import { AssetMetricsGrid } from "@/components/assets/AssetMetricsGrid";
+import { ExternalFinanceLink } from "@/components/assets/ExternalFinanceLink";
+import { externalDataSourceLabel } from "@/lib/assets/external-finance-url";
+import { StockOpportunityFilters } from "@/components/opportunities/StockOpportunityFilters";
+import { defaultStockOpportunityFilters, filterAndSortStockOpportunities, type StockOpportunityFilterState } from "@/lib/opportunities/stock-filters";
 
 type Role = "ADMIN" | "CLIENTE";
 type ClientStatus = "ativo" | "pendente" | "bloqueado" | "vencido";
@@ -187,6 +210,8 @@ type Account = {
   subscriptionStatus?: "active" | "expired" | "cancelled" | "blocked";
   notes?: string;
   permissions: ClientModuleId[];
+  nameChangeCount?: number;
+  nameChangeHistory?: string[];
 };
 
 type Payment = {
@@ -405,6 +430,18 @@ function applyPlanValuesToAccounts(accounts: Account[], plans: Plan[]) {
   });
 }
 
+function normalizePortfolioPositions(positions: PortfolioPosition[]) {
+  return positions.flatMap((position) => {
+    const assetType = position.assetType ?? inferAssetType(position.ticker);
+    const quantity = validateAssetQuantity(position.quantity, assetType);
+    const averagePrice = validateDecimalInput(position.averagePrice, {
+      maxDecimalPlaces: CRYPTO_MAX_DECIMAL_PLACES,
+      fieldLabel: "O preço médio"
+    });
+    if (!quantity.ok || !averagePrice.ok) return [];
+    return [{ ...position, quantity: quantity.value, averagePrice: averagePrice.value, assetType }];
+  });
+}
 function mergeAppState(server: Partial<AppStatePayload>, local: AppStatePayload): AppStatePayload {
   const plans = normalizePlans(mergeById(normalizePlans(server.plans ?? []), local.plans));
   const accounts = applyPlanValuesToAccounts(mergeAccounts(normalizeAccounts(server.accounts ?? []), local.accounts), plans);
@@ -412,7 +449,7 @@ function mergeAppState(server: Partial<AppStatePayload>, local: AppStatePayload)
     accounts,
     plans,
     payments: mergeById(server.payments ?? [], local.payments),
-    portfolio: (server.portfolio?.length ? server.portfolio : local.portfolio).length ? (server.portfolio?.length ? server.portfolio : local.portfolio) : starterPortfolio,
+    portfolio: normalizePortfolioPositions((server.portfolio?.length ? server.portfolio : local.portfolio).length ? (server.portfolio?.length ? server.portfolio : local.portfolio) : starterPortfolio),
     planPriceHistory: mergeById(server.planPriceHistory ?? [], local.planPriceHistory),
     grahamSettings: normalizeGrahamSettings(server.grahamSettings ?? local.grahamSettings),
     fiiSettings: normalizeFiiSettings(server.fiiSettings ?? local.fiiSettings),
@@ -457,15 +494,6 @@ function assetWithScore(asset: Asset, weights: RadarWeights, grahamSettings: Gra
   return { ...asset, score: Math.min(100, Math.round(baseScore + graham)) };
 }
 
-function passesGrahamOpportunityFilters(asset: Asset, filters: { onlyBelow: boolean; minMargin: number; onlyPositiveLpa: boolean; onlyPositiveVpa: boolean }) {
-  const analysis = analisarNumeroGraham(asset);
-  const inputs = deriveGrahamInputs(asset);
-  if (filters.onlyPositiveLpa && (!inputs.lpa || inputs.lpa <= 0)) return false;
-  if (filters.onlyPositiveVpa && (!inputs.vpa || inputs.vpa <= 0)) return false;
-  if (filters.onlyBelow && (!analysis.applicable || (analysis.difference ?? 0) <= 0)) return false;
-  if (filters.minMargin > 0 && (!analysis.applicable || (analysis.safetyMargin ?? -Infinity) < filters.minMargin)) return false;
-  return true;
-}
 
 function fiiNumeric(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -571,9 +599,6 @@ function buildAssetMap(extraAssets: Asset[]) {
   [...localAssets, ...extraAssets].forEach((asset) => map.set(asset.ticker, asset));
   return Array.from(map.values());
 }
-function googleFinanceUrl(asset: Pick<Asset, "ticker" | "sourceUrl">) {
-  return asset.sourceUrl ?? `https://www.google.com/finance/beta/quote/${asset.ticker}:BVMF`;
-}
 function quoteToAsset(quote: ExternalQuote, previousAsset?: Asset): Asset {
   const base = previousAsset ?? createGeneratedAsset(quote.ticker);
   const previous = quote.previousClose ?? Math.max(0.01, quote.price - (quote.change ?? 0));
@@ -661,6 +686,11 @@ export default function AlfatecInvestPro() {
   const [favorites, setFavorites] = useState<string[]>(["GARE11", "PETR4", "BTC"]);
   const [searchHistory, setSearchHistory] = useState<string[]>([]);
   const [portfolio, setPortfolio] = useState<PortfolioPosition[]>(starterPortfolio);
+  const [portfolioTickerInput, setPortfolioTickerInput] = useState("");
+  const [portfolioQuantityInput, setPortfolioQuantityInput] = useState("");
+  const [portfolioAveragePriceInput, setPortfolioAveragePriceInput] = useState("");
+  const [portfolioFormError, setPortfolioFormError] = useState("");
+  const [editingPortfolioId, setEditingPortfolioId] = useState<string | null>(null);
   const [range, setRange] = useState<RangeId>("1A");
   const [assetA, setAssetA] = useState<Asset>(() => getAsset("GARE11"));
   const [assetB, setAssetB] = useState<Asset>(() => getAsset("PETR4"));
@@ -675,10 +705,8 @@ export default function AlfatecInvestPro() {
   const [fiiAsset, setFiiAsset] = useState<Asset>(() => getAsset("GARE11"));
   const [fiiFilters, setFiiFilters] = useState<FiiOpportunityFilterState>(defaultFiiFilters);
   const [radarFiiFilters, setRadarFiiFilters] = useState<FiiOpportunityFilterState>({ ...defaultFiiFilters, minScore: 70, minimumConfidence: "Baixa" });
-  const [opGrahamOnly, setOpGrahamOnly] = useState(false);
-  const [opMinMargin, setOpMinMargin] = useState(0);
-  const [opPositiveLpa, setOpPositiveLpa] = useState(false);
-  const [opPositiveVpa, setOpPositiveVpa] = useState(false);
+  const [opportunityCategory, setOpportunityCategory] = useState<"ACAO" | "FII" | "CRIPTO">("ACAO");
+  const [stockOpportunityFilters, setStockOpportunityFilters] = useState<StockOpportunityFilterState>(defaultStockOpportunityFilters);
   const [radarGrahamOnly, setRadarGrahamOnly] = useState(false);
   const [radarMinMargin, setRadarMinMargin] = useState(0);
   const [radarMinPotential, setRadarMinPotential] = useState(0);
@@ -696,12 +724,22 @@ export default function AlfatecInvestPro() {
 
   const assets = useMemo(() => buildAssetMap(extraAssets), [extraAssets]);
   const portfolioAnalysis = useMemo(() => analyzePortfolio(portfolio, assets), [portfolio, assets]);
-  const portfolioDividendCycle = useMemo(() => portfolioAnalysis.lines.reduce((sum, line) => sum + (dividendPerShare(line.asset) ?? 0) * line.quantity, 0), [portfolioAnalysis.lines]);
+  const portfolioInputType = useMemo(() => inferAssetType(portfolioTickerInput), [portfolioTickerInput]);
+  const portfolioDividendCycle = useMemo(() => portfolioAnalysis.lines.reduce((sum, line) => sum + multiplyDecimalToNumber(line.quantity, dividendPerShare(line.asset) ?? 0), 0), [portfolioAnalysis.lines]);
   const marketResults = useMemo(() => searchAssets(marketSearch, marketType, assets, { includeDynamic: false }), [marketSearch, marketType, assets]);
   const rankedAssets = useMemo(() => [...assets].map((asset) => assetWithScore(asset, weights, grahamSettings, fiiSettings)).sort((a, b) => b.score - a.score), [assets, weights, grahamSettings, fiiSettings]);
-  const opportunityResults = useMemo(() => marketResults.filter((asset) => asset.type !== "FII" && asset.type !== "CRIPTO").map((asset) => assetWithScore(asset, weights, grahamSettings, fiiSettings)).filter((asset) => passesGrahamOpportunityFilters(asset, { onlyBelow: opGrahamOnly, minMargin: opMinMargin, onlyPositiveLpa: opPositiveLpa, onlyPositiveVpa: opPositiveVpa })).sort((a, b) => (analisarNumeroGraham(b).safetyMargin ?? -Infinity) - (analisarNumeroGraham(a).safetyMargin ?? -Infinity)), [marketResults, weights, grahamSettings, fiiSettings, opGrahamOnly, opMinMargin, opPositiveLpa, opPositiveVpa]);
-  const rankedOpportunityAssets = useMemo(() => rankedAssets.filter((asset) => asset.type !== "FII" && asset.type !== "CRIPTO" && passesGrahamOpportunityFilters(asset, { onlyBelow: opGrahamOnly, minMargin: opMinMargin, onlyPositiveLpa: opPositiveLpa, onlyPositiveVpa: opPositiveVpa })), [rankedAssets, opGrahamOnly, opMinMargin, opPositiveLpa, opPositiveVpa]);
-  const radarAssets = useMemo(() => rankedAssets.filter((asset) => asset.type !== "FII" && asset.type !== "CRIPTO" && passesRadarFilters(asset, { grahamOnly: radarGrahamOnly, minMargin: radarMinMargin, minPotential: radarMinPotential, maxPl: radarMaxPl, maxPvp: radarMaxPvp, minLiquidity: radarMinLiquidity, minRoe: radarMinRoe, maxDebt: radarMaxDebt })), [rankedAssets, radarGrahamOnly, radarMinMargin, radarMinPotential, radarMaxPl, radarMaxPvp, radarMinLiquidity, radarMinRoe, radarMaxDebt]);
+  const stockOpportunityAssets = useMemo(
+    () => filterAndSortStockOpportunities(rankedAssets, stockOpportunityFilters, favorites),
+    [rankedAssets, stockOpportunityFilters, favorites]
+  );
+  const stockOpportunitySectors = useMemo(
+    () => Array.from(new Set(rankedAssets.filter((asset) => asset.type === "ACAO").map((asset) => asset.sector))).sort(),
+    [rankedAssets]
+  );
+  const stockOpportunitySegments = useMemo(
+    () => Array.from(new Set(rankedAssets.filter((asset) => asset.type === "ACAO").map((asset) => asset.segment))).sort(),
+    [rankedAssets]
+  );  const radarAssets = useMemo(() => rankedAssets.filter((asset) => asset.type !== "FII" && asset.type !== "CRIPTO" && passesRadarFilters(asset, { grahamOnly: radarGrahamOnly, minMargin: radarMinMargin, minPotential: radarMinPotential, maxPl: radarMaxPl, maxPvp: radarMaxPvp, minLiquidity: radarMinLiquidity, minRoe: radarMinRoe, maxDebt: radarMaxDebt })), [rankedAssets, radarGrahamOnly, radarMinMargin, radarMinPotential, radarMaxPl, radarMaxPvp, radarMinLiquidity, radarMinRoe, radarMaxDebt]);
   const fiiAnalyses = useMemo(() => assets.filter((asset) => asset.type === "FII").map((asset) => ({ asset, analysis: analisarAlfatecFii(asset, fiiSettings) })), [assets, fiiSettings]);
   const fiiSegments = useMemo(() => Array.from(new Set(fiiAnalyses.map((item) => item.asset.segment))).sort(), [fiiAnalyses]);
   const fiiOpportunityAnalyses = useMemo(() => fiiAnalyses.filter((item) => passesFiiFilters(item.analysis, fiiFilters)).sort((a, b) => (b.analysis.score ?? -Infinity) - (a.analysis.score ?? -Infinity)), [fiiAnalyses, fiiFilters]);
@@ -927,13 +965,9 @@ export default function AlfatecInvestPro() {
     }
   }
 
-  async function requestAccount(payload: { name: string; email: string; phone: string; password: string; planId: string }) {
+  async function requestAccount(payload: PublicRegistrationPayload) {
     setRegisterMessage("");
     setLoginError("");
-    if (!isStrongPassword(payload.password)) {
-      setRegisterMessage(passwordRequirementMessage());
-      return;
-    }
     try {
       const response = await fetch("/api/auth/register", {
         method: "POST",
@@ -942,7 +976,7 @@ export default function AlfatecInvestPro() {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data?.error ?? "Nao foi possivel criar a conta.");
-      setRegisterMessage(data.message ?? "Conta criada. Aguarde a liberacao do administrador.");
+      setRegisterMessage(data.message ?? "Cadastro provisório criado. Verifique seu e-mail para continuar.");
     } catch (error) {
       setRegisterMessage(error instanceof Error ? error.message : "Nao foi possivel criar a conta.");
     }
@@ -984,18 +1018,46 @@ export default function AlfatecInvestPro() {
   function addPortfolioPosition(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
-    const ticker = normalizeTicker(String(formData.get("ticker") ?? ""));
-    const quantity = Number(formData.get("quantity") ?? 0);
-    const averagePrice = Number(formData.get("averagePrice") ?? 0);
+    const ticker = normalizeTicker(portfolioTickerInput);
     const broker = String(formData.get("broker") ?? "").trim() || "Não informada";
     const purchaseDate = String(formData.get("purchaseDate") ?? "") || todayIso();
-    if (!ticker || quantity <= 0 || averagePrice <= 0) return;
+    if (!ticker) {
+      setPortfolioFormError("Informe o ticker do ativo.");
+      return;
+    }
     const asset = resolveAssetFromSearch(ticker);
-    if (!asset) return;
-    setPortfolio((current) => [{ id: crypto.randomUUID(), ticker: asset.ticker, quantity, averagePrice, broker, purchaseDate }, ...current]);
+    if (!asset) {
+      setPortfolioFormError("Ativo não encontrado.");
+      return;
+    }
+    const quantity = validateAssetQuantity(portfolioQuantityInput, asset.type);
+    if (!quantity.ok) {
+      setPortfolioFormError(quantity.error);
+      return;
+    }
+    const averagePrice = validateDecimalInput(portfolioAveragePriceInput, {
+      maxDecimalPlaces: CRYPTO_MAX_DECIMAL_PLACES,
+      fieldLabel: "O preço médio"
+    });
+    if (!averagePrice.ok) {
+      setPortfolioFormError(averagePrice.error);
+      return;
+    }
+    setPortfolio((current) => [{
+      id: crypto.randomUUID(),
+      ticker: asset.ticker,
+      quantity: quantity.value,
+      averagePrice: averagePrice.value,
+      assetType: asset.type,
+      broker,
+      purchaseDate
+    }, ...current]);
+    setPortfolioTickerInput("");
+    setPortfolioQuantityInput("");
+    setPortfolioAveragePriceInput("");
+    setPortfolioFormError("");
     event.currentTarget.reset();
   }
-
   async function addClient(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -1158,6 +1220,7 @@ export default function AlfatecInvestPro() {
 
         {adminModule === "clientes" && (
           <Section title="Clientes" subtitle="Cadastre, edite, bloqueie, desbloqueie e altere planos de acesso." eyebrow="Controle de acesso">
+            <AdminPendingRegistrations />
             <div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
               <PremiumCard title="Cadastrar novo cliente" description="Defina plano, senha inicial e vencimento." icon={UserCog}>
                 <form onSubmit={addClient} className="grid gap-3">
@@ -1197,7 +1260,7 @@ export default function AlfatecInvestPro() {
                         </div>
                         <p className="mt-2 text-xs font-semibold text-slate-500 dark:text-slate-300">Valor atual da assinatura: {money.format(client.planValue ?? plan?.value ?? 0)}</p>
                         <button onClick={() => setSelectedClientId(selectedClientId === client.id ? null : client.id)} className="mt-3 text-sm font-bold text-teal-500">{selectedClientId === client.id ? "Ocultar permissões" : "Editar permissões"}</button>
-                        {selectedClientId === client.id && <PermissionsEditor client={client} updateClient={updateClient} />}
+                        {selectedClientId === client.id && <><AdminIdentityEditor client={client} onUpdated={(updated) => updateClient(client.id, { name: updated.name, email: updated.email, nameChangeCount: updated.nameChangeCount })} /><PermissionsEditor client={client} updateClient={updateClient} /></>}
                       </div>
                     );
                   })}
@@ -1250,7 +1313,7 @@ export default function AlfatecInvestPro() {
           </Section>
         )}
 
-        {adminModule === "configuracoes" && <SettingsSection currentUser={currentUser} darkMode={darkMode} setDarkMode={setDarkMode} settings={settings} setSettings={setSettings} changePassword={changePassword} logout={logout} />}
+        {adminModule === "configuracoes" && <SettingsSection currentUser={currentUser} darkMode={darkMode} setDarkMode={setDarkMode} settings={settings} setSettings={setSettings} changePassword={changePassword} logout={logout} onAccountUpdated={(updated) => setAccounts((current) => current.map((account) => account.id === updated.id ? { ...account, ...updated } : account))} />}
       </Shell>
     );
   }
@@ -1289,58 +1352,52 @@ export default function AlfatecInvestPro() {
                   {marketQuoteMessage && <div className={cls("rounded-3xl border p-5 text-sm font-bold", marketQuoteStatus === "error" ? "border-amber-400/40 bg-amber-500/10 text-amber-600 dark:text-amber-300" : "border-cyan-400/40 bg-cyan-500/10 text-cyan-700 dark:text-cyan-200")}>{marketQuoteStatus === "loading" ? "Consultando cotação externa..." : marketQuoteMessage}</div>}
                 </div>
               </PremiumCard>
-              <AssetPanel asset={selectedAsset} favorites={favorites} setFavorites={setFavorites} onAddToPortfolio={(asset) => setPortfolio((current) => [{ id: crypto.randomUUID(), ticker: asset.ticker, quantity: 1, averagePrice: asset.price, broker: "Manual", purchaseDate: todayIso() }, ...current])} onOpenFiiAnalysis={(asset) => { setFiiAsset(asset); setFiiSearch(asset.ticker); setClientModule("alfatec_fiis"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_fiis"); }} cryptoAnalysis={selectedAsset.type === "CRIPTO" ? cryptoAnalyses.find((item) => item.ticker === selectedAsset.ticker) ?? null : null} onOpenCryptoAnalysis={(asset) => { setCryptoTicker(asset.ticker); void loadCryptoData([asset.ticker]); setClientModule("alfatec_crypto_method"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_crypto_method"); }} />
+              <AssetPanel asset={selectedAsset} favorites={favorites} setFavorites={setFavorites} onAddToPortfolio={(asset) => setPortfolio((current) => [{ id: crypto.randomUUID(), ticker: asset.ticker, quantity: "1", averagePrice: String(asset.price), assetType: asset.type, broker: "Manual", purchaseDate: todayIso() }, ...current])} onOpenFiiAnalysis={(asset) => { setFiiAsset(asset); setFiiSearch(asset.ticker); setClientModule("alfatec_fiis"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_fiis"); }} cryptoAnalysis={selectedAsset.type === "CRIPTO" ? cryptoAnalyses.find((item) => item.ticker === selectedAsset.ticker) ?? null : null} onOpenCryptoAnalysis={(asset) => { setCryptoTicker(asset.ticker); void loadCryptoData([asset.ticker]); setClientModule("alfatec_crypto_method"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_crypto_method"); }} />
             </div>
           </Section>
         )}
 
         {clientModule === "oportunidades" && (
-          <Section title="Oportunidades" subtitle="Ranking automático por score, dividendos, qualidade, valor e crescimento." eyebrow="Radar de oportunidades">
-            <div className="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
-              <div className="space-y-6">
-                <PremiumCard title="Critérios do radar" description="Resumo dos pesos usados nas notas e recomendações." icon={BrainCircuit}>
-                  <div className="grid gap-3 text-sm text-slate-600 dark:text-slate-300">
-                    <p>As notas combinam dividend yield, valuation, qualidade operacional, crescimento, liquidez e risco. O ativo sobe no ranking quando entrega bons fundamentos com risco controlado e liquidez suficiente.</p>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      <InfoTile label="Dividendos" value={`${weights.dividendYield}% do peso`} />
-                      <InfoTile label="Valuation" value={`${weights.valuation}% do peso`} />
-                      <InfoTile label="Qualidade" value={`${weights.quality}% do peso`} />
-                      <InfoTile label="Crescimento" value={`${weights.growth}% do peso`} />
-                    </div>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">A recomendação é uma leitura automatizada do radar, não uma orientação personalizada de investimento.</p>
-                  </div>
+          <Section title="Oportunidades" subtitle="Filtros especializados e rankings separados por classe de ativo." eyebrow="Radar de oportunidades">
+            <div className="mb-6 grid grid-cols-1 gap-2 rounded-2xl bg-slate-200 p-1.5 dark:bg-white/5 sm:grid-cols-3">
+              <button type="button" onClick={() => setOpportunityCategory("ACAO")} className={cls("min-h-11 rounded-xl px-4 text-sm font-black transition", opportunityCategory === "ACAO" ? "bg-cyan-500 text-white" : "text-slate-600 hover:bg-white dark:text-slate-300 dark:hover:bg-white/10")}>Ações</button>
+              <button type="button" onClick={() => setOpportunityCategory("FII")} className={cls("min-h-11 rounded-xl px-4 text-sm font-black transition", opportunityCategory === "FII" ? "bg-cyan-500 text-white" : "text-slate-600 hover:bg-white dark:text-slate-300 dark:hover:bg-white/10")}>FIIs</button>
+              <button type="button" onClick={() => setOpportunityCategory("CRIPTO")} className={cls("min-h-11 rounded-xl px-4 text-sm font-black transition", opportunityCategory === "CRIPTO" ? "bg-cyan-500 text-white" : "text-slate-600 hover:bg-white dark:text-slate-300 dark:hover:bg-white/10")}>Cripto</button>
+            </div>
+
+            {opportunityCategory === "ACAO" && (
+              <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
+                <PremiumCard title="Filtros de Oportunidades em Ações" description="Critérios cumulativos de fundamentos, liquidez, confiança e Número de Graham." icon={Search}>
+                  <StockOpportunityFilters
+                    value={stockOpportunityFilters}
+                    onChange={setStockOpportunityFilters}
+                    sectors={stockOpportunitySectors}
+                    segments={stockOpportunitySegments}
+                    resultCount={stockOpportunityAssets.length}
+                  />
                 </PremiumCard>
-                <PremiumCard title="Filtros rápidos" description="Use para filtrar oportunidades por mercado e Número de Graham." icon={Search}>
-                  <div className="mb-4 flex flex-col gap-3 lg:flex-row">
-                    <div className="relative flex-1"><Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" /><input value={marketSearch} onChange={(e) => setMarketSearch(e.target.value)} placeholder="Ex.: GARE11, dividendos, logística, banco..." className="h-12 w-full rounded-2xl border border-slate-200 bg-white pl-12 pr-4 outline-none focus:border-teal-400 dark:border-white/10 dark:bg-white/5" /></div>
-                    <select value={marketType} onChange={(e) => setMarketType(e.target.value as AssetType | "TODOS")} className="h-12 rounded-2xl border border-slate-200 bg-white px-4 dark:border-white/10 dark:bg-slate-950">{assetTypeOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
-                  </div>
-                  <GrahamOpportunityFilter onlyBelow={opGrahamOnly} setOnlyBelow={setOpGrahamOnly} minMargin={opMinMargin} setMinMargin={setOpMinMargin} onlyPositiveLpa={opPositiveLpa} setOnlyPositiveLpa={setOpPositiveLpa} onlyPositiveVpa={opPositiveVpa} setOnlyPositiveVpa={setOpPositiveVpa} />
-                  <div className="mt-4 space-y-3">{opportunityResults.slice(0, 8).map((asset, index) => <RankingRow key={asset.ticker} asset={asset} index={index + 1} onClick={() => selectAsset(asset, "mercado")} />)}</div>
+                <PremiumCard title="Oportunidades em ações" description="O Número de Graham é apenas um componente e a fórmula com crescimento não é usada nesta tela." icon={TrendingUp}>
+                  <GrahamOpportunityTable assets={stockOpportunityAssets.slice(0, 50)} onSelect={(asset) => selectAsset(asset, "mercado")} />
+                  {!stockOpportunityAssets.length && <p className="mt-4 rounded-2xl bg-amber-500/10 p-4 text-sm font-semibold text-amber-800 dark:text-amber-200">Nenhuma ação atende aos filtros atuais. Dados ausentes de Graham não são substituídos por zero.</p>}
                 </PremiumCard>
               </div>
-              <PremiumCard title="Melhores scores do mercado" description="Classificação automatizada com critérios transparentes. Não ? recomendação personalizada." icon={TrendingUp}>
-                <GrahamOpportunityTable assets={rankedOpportunityAssets.slice(0, 12)} onSelect={(asset) => selectAsset(asset, "mercado")} />
+            )}
+
+            {opportunityCategory === "FII" && (
+              <PremiumCard title="Oportunidades em FIIs" description="Score AlfaTec FIIs, renda recorrente, risco, valuation, liquidez e confiança dos dados." icon={Building2}>
+                <FiiOpportunityFilters value={fiiFilters} onChange={(patch) => setFiiFilters((current) => ({ ...current, ...patch }))} segments={fiiSegments} />
+                <div className="mt-4"><FiiOpportunitiesTable items={fiiOpportunityAnalyses.slice(0, 50)} onSelect={(asset) => { setFiiAsset(asset); setFiiSearch(asset.ticker); setClientModule("alfatec_fiis"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_fiis"); }} /></div>
               </PremiumCard>
-              <div className="xl:col-span-2">
-                <PremiumCard title="Oportunidades em FIIs" description="Score AlfaTec FIIs, renda recorrente, risco, valuation, liquidez e confiança dos dados." icon={Building2}>
-                  <FiiOpportunityFilters value={fiiFilters} onChange={(patch) => setFiiFilters((current) => ({ ...current, ...patch }))} segments={fiiSegments} />
-                  <div className="mt-4"><FiiOpportunitiesTable items={fiiOpportunityAnalyses.slice(0, 12)} onSelect={(asset) => { setFiiAsset(asset); setFiiSearch(asset.ticker); setClientModule("alfatec_fiis"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_fiis"); }} /></div>
-                </PremiumCard>
-              </div>
-            </div>
+            )}
+
+            {opportunityCategory === "CRIPTO" && (
+              <PremiumCard title="Oportunidades em criptoativos" description="Score AlfaTec Cripto com dados reais, categoria, mercado, tokenomics, risco e confiança." icon={Bitcoin}>
+                <CryptoOpportunityFilters value={cryptoFilters} onChange={(patch) => setCryptoFilters((current) => ({ ...current, ...patch }))} categories={cryptoFilterCategories} />
+                <div className="mt-4"><CryptoOpportunityTable items={cryptoOpportunityAnalyses} onSelect={(ticker) => { setCryptoTicker(ticker); setClientModule("alfatec_crypto_method"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_crypto_method"); }} /></div>
+              </PremiumCard>
+            )}
           </Section>
         )}
-
-        {clientModule === "oportunidades" && (
-          <div className="mt-6">
-            <PremiumCard title="Oportunidades em criptoativos" description="Score AlfaTec Cripto com dados reais, categoria, mercado, tokenomics, risco e confianca." icon={Bitcoin}>
-              <CryptoOpportunityFilters value={cryptoFilters} onChange={(patch) => setCryptoFilters((current) => ({ ...current, ...patch }))} categories={cryptoFilterCategories} />
-              <div className="mt-4"><CryptoOpportunityTable items={cryptoOpportunityAnalyses} onSelect={(ticker) => { setCryptoTicker(ticker); setClientModule("alfatec_crypto_method"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_crypto_method"); }} /></div>
-            </PremiumCard>
-          </div>
-        )}
-
         {clientModule === "comparador" && (
           <Section title="Comparador" subtitle="Compare qualquer combinação: ação, FII, ETF, BDR ou cripto." eyebrow="Gráfico profissional">
             <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
@@ -1369,10 +1426,70 @@ export default function AlfatecInvestPro() {
             </div>
             <div className="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
               <PremiumCard title="Adicionar ativo" description="Ticker, quantidade, preço médio, corretora e data." icon={Plus}>
-                <form onSubmit={addPortfolioPosition} className="grid gap-3"><Input name="ticker" label="Ticker" placeholder="GARE11" required /><Input name="quantity" type="number" step="0.01" label="Quantidade" required /><Input name="averagePrice" type="number" step="0.01" label="Preço médio" required /><Input name="broker" label="Corretora" placeholder="XP, Rico, BTG..." /><Input name="purchaseDate" type="date" label="Data da compra" /><button className="rounded-2xl bg-teal-500 px-4 py-3 font-bold text-white">Adicionar à carteira</button></form>
+                <form onSubmit={addPortfolioPosition} className="grid gap-3">
+                  <Input name="ticker" label="Ticker" placeholder="GARE11 ou BTC" value={portfolioTickerInput} onChange={(event) => setPortfolioTickerInput(event.target.value)} required />
+                  <CryptoQuantityInput value={portfolioQuantityInput} onChange={setPortfolioQuantityInput} assetType={portfolioInputType} />
+                  <Input name="averagePrice" type="text" inputMode="decimal" label="Preço médio" value={portfolioAveragePriceInput} onChange={(event) => setPortfolioAveragePriceInput(event.target.value)} placeholder="0,00" required />
+                  <Input name="broker" label="Corretora" placeholder="XP, Rico, BTG..." />
+                  <Input name="purchaseDate" type="date" label="Data da compra" />
+                  {portfolioFormError && <p className="rounded-2xl bg-red-500/10 p-3 text-sm font-semibold text-red-700 dark:text-red-300">{portfolioFormError}</p>}
+                  <button className="rounded-2xl bg-teal-500 px-4 py-3 font-bold text-white">Adicionar à carteira</button>
+                </form>
               </PremiumCard>
               <PremiumCard title="Posições" description="Análise automática das posições cadastradas." icon={WalletCards}>
-                <div className="overflow-x-auto"><table className="min-w-full text-sm"><thead><tr className="text-left text-slate-500 dark:text-slate-300"><th className="p-3">Ativo</th><th className="p-3">Qtd.</th><th className="p-3">Preço médio</th><th className="p-3">Atual</th><th className="p-3">Lucro/Prejuízo</th><th className="p-3">Div./ação</th><th className="p-3">Freq.</th><th className="p-3">A receber</th><th className="p-3">Peso</th><th className="p-3"></th></tr></thead><tbody>{portfolioAnalysis.lines.map((line) => { const dividend = dividendPerShare(line.asset); const totalDividend = dividend === undefined ? undefined : dividend * line.quantity; return <tr key={line.id} className="border-t border-slate-100 dark:border-white/10"><td className="p-3 font-black">{line.ticker}<p className="text-xs font-normal text-slate-500 dark:text-slate-300">{typeLabels[line.asset.type]}</p></td><td className="p-3">{line.quantity}</td><td className="p-3">{money.format(line.averagePrice)}</td><td className="p-3">{money.format(line.asset.price)}</td><td className={cls("p-3 font-black", line.profit >= 0 ? "text-emerald-500" : "text-red-500")}>{money.format(line.profit)}<p className="text-xs">{pct(line.profitability)}</p></td><td className="p-3 font-semibold">{dividend === undefined ? "-" : money.format(dividend)}</td><td className="p-3">{dividendFrequency(line.asset)}</td><td className="p-3 font-black text-cyan-600 dark:text-cyan-300">{totalDividend === undefined ? "-" : money.format(totalDividend)}</td><td className="p-3">{pct(line.weight)}</td><td className="p-3"><button onClick={() => setPortfolio((current) => current.filter((item) => item.id !== line.id))} className="rounded-xl bg-red-500/10 p-2 text-red-500"><Trash2 className="h-4 w-4" /></button></td></tr>; })}</tbody></table></div>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-slate-500 dark:text-slate-300">
+                        <th className="p-3">Ativo</th><th className="p-3">Qtd.</th><th className="p-3">Preço médio</th>
+                        <th className="p-3">Atual</th><th className="p-3">Lucro/Prejuízo</th><th className="p-3">Div./ação</th>
+                        <th className="p-3">Freq.</th><th className="p-3">A receber</th><th className="p-3">Peso</th><th className="p-3">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {portfolioAnalysis.lines.map((line) => {
+                        const dividend = dividendPerShare(line.asset);
+                        const totalDividend = dividend === undefined ? undefined : multiplyDecimalToNumber(line.quantity, dividend);
+                        return (
+                          <Fragment key={line.id}>
+                            <tr className="border-t border-slate-100 dark:border-white/10">
+                              <td className="p-3 font-black">{line.ticker}<p className="text-xs font-normal text-slate-500 dark:text-slate-300">{typeLabels[line.asset.type]}</p></td>
+                              <td className="p-3"><DecimalValueDisplay value={line.quantity} expandable={line.asset.type === "CRIPTO"} /></td>
+                              <td className="p-3">{money.format(decimalToNumber(line.averagePrice))}</td>
+                              <td className="p-3">{money.format(line.asset.price)}</td>
+                              <td className={cls("p-3 font-black", line.profit >= 0 ? "text-emerald-500" : "text-red-500")}>{money.format(line.profit)}<p className="text-xs">{pct(line.profitability)}</p></td>
+                              <td className="p-3 font-semibold">{dividend === undefined ? "-" : money.format(dividend)}</td>
+                              <td className="p-3">{dividendFrequency(line.asset)}</td>
+                              <td className="p-3 font-black text-cyan-600 dark:text-cyan-300">{totalDividend === undefined ? "-" : money.format(totalDividend)}</td>
+                              <td className="p-3">{pct(line.weight)}</td>
+                              <td className="p-3">
+                                <div className="flex gap-1">
+                                  <button type="button" onClick={() => setEditingPortfolioId(line.id)} className="rounded-xl bg-cyan-500/10 p-2 text-cyan-600 dark:text-cyan-300" title="Editar posição" aria-label={"Editar posição " + line.ticker}><Pencil className="h-4 w-4" /></button>
+                                  <button type="button" onClick={() => setPortfolio((current) => current.filter((item) => item.id !== line.id))} className="rounded-xl bg-red-500/10 p-2 text-red-500" title="Excluir posição" aria-label={"Excluir posição " + line.ticker}><Trash2 className="h-4 w-4" /></button>
+                                </div>
+                              </td>
+                            </tr>
+                            {editingPortfolioId === line.id && (
+                              <tr className="border-t border-slate-100 dark:border-white/10">
+                                <td colSpan={10} className="p-3">
+                                  <PortfolioPositionEditor
+                                    position={line}
+                                    assetType={line.asset.type}
+                                    onCancel={() => setEditingPortfolioId(null)}
+                                    onSave={(quantity, averagePrice) => {
+                                      setPortfolio((current) => current.map((item) => item.id === line.id ? { ...item, quantity, averagePrice, assetType: line.asset.type } : item));
+                                      setEditingPortfolioId(null);
+                                    }}
+                                  />
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </PremiumCard>
             </div>
             <div className="mt-6 grid gap-6 lg:grid-cols-2"><PremiumCard title="Análise IA da carteira" description="Diversificação, concentração, risco e dividendos." icon={BrainCircuit}><ul className="space-y-2">{portfolioAnalysis.aiSummary.map((item) => <li key={item} className="flex gap-2 text-sm"><ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-teal-500" />{item}</li>)}</ul></PremiumCard><PremiumCard title="Alertas automatizados" description="Condições de risco e concentração." icon={AlertTriangle}><ul className="space-y-2">{portfolioAnalysis.alerts.map((item) => <li key={item} className="flex gap-2 text-sm"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />{item}</li>)}</ul></PremiumCard></div>
@@ -1418,7 +1535,7 @@ export default function AlfatecInvestPro() {
           </Section>
         )}
 
-        {clientModule === "configuracoes" && <SettingsSection currentUser={currentUser} darkMode={darkMode} setDarkMode={setDarkMode} settings={settings} setSettings={setSettings} changePassword={changePassword} logout={logout} />}
+        {clientModule === "configuracoes" && <SettingsSection currentUser={currentUser} darkMode={darkMode} setDarkMode={setDarkMode} settings={settings} setSettings={setSettings} changePassword={changePassword} logout={logout} onAccountUpdated={(updated) => setAccounts((current) => current.map((account) => account.id === updated.id ? { ...account, ...updated } : account))} />}
       </div>
     </Shell>
   );
@@ -1542,22 +1659,9 @@ function Shell({ darkMode, setDarkMode, logout, user, modules, activeId, onMenu,
   );
 }
 
-function LoginScreen({ darkMode, setDarkMode, loginUser, setLoginUser, loginPassword, setLoginPassword, showPassword, setShowPassword, loginError, registerMessage, databaseError, plans, stateLoaded, onSubmit, onRegister }: { darkMode: boolean; setDarkMode: (value: boolean) => void; loginUser: string; setLoginUser: (value: string) => void; loginPassword: string; setLoginPassword: (value: string) => void; showPassword: boolean; setShowPassword: (value: boolean) => void; loginError: string; registerMessage: string; databaseError: string; plans: Plan[]; stateLoaded: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onRegister: (payload: { name: string; email: string; phone: string; password: string; planId: string }) => void }) {
+function LoginScreen({ darkMode, setDarkMode, loginUser, setLoginUser, loginPassword, setLoginPassword, showPassword, setShowPassword, loginError, registerMessage, databaseError, plans, stateLoaded, onSubmit, onRegister }: { darkMode: boolean; setDarkMode: (value: boolean) => void; loginUser: string; setLoginUser: (value: string) => void; loginPassword: string; setLoginPassword: (value: string) => void; showPassword: boolean; setShowPassword: (value: boolean) => void; loginError: string; registerMessage: string; databaseError: string; plans: Plan[]; stateLoaded: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onRegister: (payload: PublicRegistrationPayload) => Promise<void> }) {
   const [mode, setMode] = useState<"login" | "register">("login");
-  const [registerPassword, setRegisterPassword] = useState("");
   const activePlans = plans.filter((plan) => plan.status === "ativo");
-
-  function submitRegister(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const formData = new FormData(event.currentTarget);
-    onRegister({
-      name: String(formData.get("name") ?? ""),
-      email: String(formData.get("email") ?? ""),
-      phone: String(formData.get("phone") ?? ""),
-      password: registerPassword,
-      planId: String(formData.get("planId") ?? activePlans[0]?.id ?? "mensal")
-    });
-  }
 
   return (
     <div className="relative grid min-h-screen overflow-y-auto bg-slate-100 px-4 py-6 text-slate-950 dark:bg-[#020817] dark:text-slate-100 sm:px-6">
@@ -1607,17 +1711,7 @@ function LoginScreen({ darkMode, setDarkMode, loginUser, setLoginUser, loginPass
                 <p className="mt-5 text-center text-xs text-slate-500 dark:text-slate-400">Você pode entrar pelo nome cadastrado, usuário ou e-mail em qualquer equipamento.</p>
               </form>
             ) : (
-              <form onSubmit={submitRegister} className="grid gap-3">
-                <Input name="name" label="Nome" placeholder="Seu nome" required />
-                <Input name="email" type="email" label="E-mail" placeholder="voce@email.com" required />
-                <Input name="phone" label="Telefone" placeholder="(00) 00000-0000" />
-                <PasswordInputWithRules label="Senha" name="password" value={registerPassword} onChange={setRegisterPassword} placeholder="Crie uma senha segura" autoComplete="new-password" />
-                <Select name="planId" label="Plano" defaultValue={activePlans[0]?.id ?? "mensal"}>{activePlans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} - {money.format(plan.value)}</option>)}</Select>
-                {registerMessage && <div className="rounded-2xl bg-cyan-500/10 p-4 text-sm font-semibold text-cyan-700 dark:text-cyan-300">{registerMessage}</div>}
-                {databaseError && <div className="rounded-2xl bg-amber-500/10 p-4 text-sm font-semibold text-amber-700 dark:text-amber-300">{databaseError}</div>}
-                <button disabled={Boolean(databaseError)} className="h-12 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 px-5 font-black text-white shadow-glow transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60">Criar conta e aguardar liberação</button>
-                <p className="text-center text-xs text-slate-500 dark:text-slate-400">O cadastro fica pendente até o administrador liberar o acesso.</p>
-              </form>
+              <PendingRegistrationForm plans={activePlans} message={registerMessage} databaseError={databaseError} onRegister={onRegister} />
             )}
           </div>
         </motion.div>
@@ -1649,11 +1743,64 @@ function MetricCard({ label, value, icon: Icon, tone }: { label: string; value: 
   return <div className="rounded-[1.7rem] border border-slate-200 bg-white p-5 shadow-premium dark:border-white/10 dark:bg-slate-900/80"><div className={cls("mb-4 grid h-11 w-11 place-items-center rounded-2xl bg-gradient-to-br text-white", tones[tone])}><Icon className="h-5 w-5" /></div><p className="text-sm text-slate-500 dark:text-slate-400">{label}</p><p className="mt-1 text-2xl font-black tracking-tight">{value}</p></div>;
 }
 function AssetCard({ asset, favorites, onSelect, onFavorite }: { asset: Asset; favorites: string[]; onSelect: () => void; onFavorite: () => void }) {
-  return <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/5"><div className="flex items-start justify-between gap-3"><button onClick={onSelect} className="text-left"><p className="text-xs text-slate-500 dark:text-slate-300">{typeLabels[asset.type]} • {asset.segment}</p><h3 className="mt-1 text-xl font-black">{asset.ticker}</h3>{asset.source === "external" && <p className="mt-2 text-xs font-bold text-cyan-600 dark:text-cyan-300">Fonte: Google Finance via provedor externo</p>}</button><button onClick={onFavorite} className="rounded-xl bg-white p-2 dark:bg-white/10"><Star className={cls("h-4 w-4", favorites.includes(asset.ticker) && "fill-amber-400 text-amber-400")} /></button></div><div className="mt-4 grid grid-cols-3 gap-2"><InfoTile label="Preço" value={money.format(asset.price)} /><InfoTile label="Dia" value={pct(asset.changeDay)} /><InfoTile label="Score" value={`${asset.score}/100`} /></div></div>;
+  const source = externalDataSourceLabel(asset.sourceLabel, asset.source);
+  return (
+    <div className="min-w-0 rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/5">
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <button onClick={onSelect} className="min-w-0 flex-1 text-left" title={asset.name}>
+          <p className="overflow-wrap-anywhere text-xs text-slate-500 dark:text-slate-300">{typeLabels[asset.type]} • {asset.segment}</p>
+          <h3 className="mt-1 text-xl font-black">{asset.ticker}</h3>
+          <p className="mt-1 break-words text-sm text-slate-600 dark:text-slate-300">{asset.name}</p>
+          <p className="mt-2 break-words text-xs font-bold text-cyan-700 dark:text-cyan-300">Fonte dos dados: {source}</p>
+        </button>
+        <button onClick={onFavorite} className="shrink-0 rounded-xl bg-white p-2 dark:bg-white/10" title={favorites.includes(asset.ticker) ? "Remover dos favoritos" : "Adicionar aos favoritos"} aria-label={favorites.includes(asset.ticker) ? "Remover " + asset.ticker + " dos favoritos" : "Adicionar " + asset.ticker + " aos favoritos"}>
+          <Star className={cls("h-4 w-4", favorites.includes(asset.ticker) && "fill-amber-400 text-amber-400")} />
+        </button>
+      </div>
+      <AssetMetricsGrid price={asset.price} changeDay={asset.changeDay} score={asset.score} assetType={asset.type} />
+    </div>
+  );
 }
+
 function AssetPanel({ asset, favorites, setFavorites, onAddToPortfolio, onOpenFiiAnalysis, cryptoAnalysis, onOpenCryptoAnalysis }: { asset: Asset; favorites: string[]; setFavorites: React.Dispatch<React.SetStateAction<string[]>>; onAddToPortfolio: (asset: Asset) => void; onOpenFiiAnalysis?: (asset: Asset) => void; cryptoAnalysis?: AlfatecCryptoAnalysis | null; onOpenCryptoAnalysis?: (asset: Asset) => void }) {
   const isFavorite = favorites.includes(asset.ticker);
-  return <PremiumCard title="Página do ativo" description="Informações, indicadores, IA e fundamentos." icon={ShieldCheck}><div className="rounded-3xl bg-gradient-to-br from-slate-950 to-slate-800 p-5 text-white"><div className="flex items-start justify-between gap-4"><div><p className="text-sm text-cyan-300">{typeLabels[asset.type]} • {asset.segment}</p><h3 className="mt-1 text-3xl font-black">{asset.ticker}</h3><p className="text-slate-300">{asset.name}</p></div><button onClick={() => setFavorites((current) => isFavorite ? current.filter((ticker) => ticker !== asset.ticker) : [asset.ticker, ...current])} className="rounded-2xl bg-white/10 p-3 hover:bg-white/20"><Star className={cls("h-5 w-5", isFavorite && "fill-amber-400 text-amber-400")} /></button></div><div className="mt-6 grid grid-cols-3 gap-3"><InfoTile dark label="Preço" value={money.format(asset.price)} /><InfoTile dark label="Ano" value={pct(asset.changeYear)} /><InfoTile dark label="Score" value={`${asset.score}/100`} /></div></div><div className="mt-4 grid grid-cols-2 gap-3"><InfoTile label="Mercado" value={asset.market} /><InfoTile label="Setor" value={asset.sector} /><InfoTile label="Liquidez" value={compactMoney.format(asset.liquidity)} /><InfoTile label="Risco" value={asset.risk} /><InfoTile label="Dividend Yield" value={pct(asset.metrics.dividendYield)} /><InfoTile label="P/VP" value={metric(asset.metrics.pvp)} /><InfoTile label="P/L" value={metric(asset.metrics.pl)} /><InfoTile label="ROE" value={pct(asset.metrics.roe)} /></div><div className="mt-4 rounded-3xl border border-slate-200 p-4 dark:border-white/10"><p className="mb-2 text-sm font-black">Resumo IA do ativo</p><p className="text-sm text-slate-600 dark:text-slate-300">{asset.summary}</p><ul className="mt-3 space-y-2">{generateAiNotes(asset).map((note) => <li key={note} className="flex gap-2 text-sm text-slate-600 dark:text-slate-300"><ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-cyan-500" />{note}</li>)}</ul></div>{asset.source === "external" && <p className="mt-3 text-sm font-bold text-cyan-600 dark:text-cyan-300">Fonte: Google Finance via provedor externo</p>}{asset.type === "FII" && <FiiAssetMiniSummary asset={asset} onOpen={() => onOpenFiiAnalysis?.(asset)} />}{asset.type === "CRIPTO" && <CryptoMiniSummary analysis={cryptoAnalysis ?? null} onOpen={() => onOpenCryptoAnalysis?.(asset)} />}<a href={googleFinanceUrl(asset)} target="_blank" rel="noreferrer" className="mt-4 flex w-full items-center justify-center rounded-2xl border border-slate-200 px-4 py-3 font-bold text-slate-700 transition hover:bg-slate-50 dark:border-white/10 dark:text-slate-100 dark:hover:bg-white/10">Abrir no Google Finanças</a><button onClick={() => onAddToPortfolio(asset)} className="mt-3 w-full rounded-2xl bg-cyan-500 px-4 py-3 font-bold text-white">Adicionar à carteira</button></PremiumCard>;
+  const source = externalDataSourceLabel(asset.sourceLabel, asset.source);
+  return (
+    <PremiumCard title="Página do ativo" description="Informações, indicadores, IA e fundamentos." icon={ShieldCheck}>
+      <div className="min-w-0 rounded-3xl bg-gradient-to-br from-slate-950 to-slate-800 p-5 text-white">
+        <div className="flex min-w-0 items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="break-words text-sm text-cyan-300">{typeLabels[asset.type]} • {asset.segment}</p>
+            <h3 className="mt-1 text-3xl font-black">{asset.ticker}</h3>
+            <p className="break-words text-slate-300" title={asset.name}>{asset.name}</p>
+            <p className="mt-2 break-words text-xs text-slate-300">Fonte dos dados: {source}</p>
+          </div>
+          <button onClick={() => setFavorites((current) => isFavorite ? current.filter((ticker) => ticker !== asset.ticker) : [asset.ticker, ...current])} className="shrink-0 rounded-2xl bg-white/10 p-3 hover:bg-white/20" aria-label={isFavorite ? "Remover dos favoritos" : "Adicionar aos favoritos"}>
+            <Star className={cls("h-5 w-5", isFavorite && "fill-amber-400 text-amber-400")} />
+          </button>
+        </div>
+        <AssetMetricsGrid dark price={asset.price} changeDay={asset.changeDay} score={asset.score} assetType={asset.type} />
+      </div>
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <InfoTile label="Mercado" value={asset.market} /><InfoTile label="Setor" value={asset.sector} />
+        <InfoTile label="Liquidez" value={compactMoney.format(asset.liquidity)} /><InfoTile label="Risco" value={asset.risk} />
+        <InfoTile label="Dividend Yield" value={pct(asset.metrics.dividendYield)} /><InfoTile label="P/VP" value={metric(asset.metrics.pvp)} />
+        <InfoTile label="P/L" value={metric(asset.metrics.pl)} /><InfoTile label="ROE" value={pct(asset.metrics.roe)} />
+      </div>
+      <div className="mt-4 rounded-3xl border border-slate-200 p-4 dark:border-white/10">
+        <p className="mb-2 text-sm font-black">Resumo IA do ativo</p>
+        <p className="text-sm text-slate-600 dark:text-slate-300">{asset.summary}</p>
+        <ul className="mt-3 space-y-2">{generateAiNotes(asset).map((note) => <li key={note} className="flex gap-2 text-sm text-slate-600 dark:text-slate-300"><ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-cyan-500" />{note}</li>)}</ul>
+      </div>
+      {asset.type === "FII" && <FiiAssetMiniSummary asset={asset} onOpen={() => onOpenFiiAnalysis?.(asset)} />}
+      {asset.type === "CRIPTO" && <CryptoMiniSummary analysis={cryptoAnalysis ?? null} onOpen={() => onOpenCryptoAnalysis?.(asset)} />}
+      <div className="mt-4 rounded-2xl bg-slate-50 p-3 text-xs text-slate-600 dark:bg-white/5 dark:text-slate-300">
+        <strong>Consulta externa:</strong> Yahoo Finance. O destino de consulta pode ser diferente da fonte usada pela plataforma.
+      </div>
+      <ExternalFinanceLink ticker={asset.ticker} assetType={asset.type} className="mt-4 w-full" />
+      <button onClick={() => onAddToPortfolio(asset)} className="mt-3 w-full rounded-2xl bg-cyan-500 px-4 py-3 font-bold text-white">Adicionar à carteira</button>
+    </PremiumCard>
+  );
 }
 function FiiAssetMiniSummary({ asset, onOpen }: { asset: Asset; onOpen: () => void }) {
   const analysis = analisarAlfatecFii(asset);
@@ -1747,7 +1894,7 @@ function GrahamValuationSection({ assets, selectedAsset, search, setSearch, setS
   const canEdit = currentUser.role === "ADMIN" || settings.clientsCanEditGrowth || settings.clientsCanEditY;
   const warning = growth > settings.maxGrowth ? "Taxas elevadas de crescimento podem produzir resultados excessivamente otimistas." : undefined;
 
-  return <Section title="Valuation Graham" subtitle="Dois métodos de Benjamin Graham com fontes, datas, premissas e limitações visíveis." eyebrow="Valuation"><div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]"><div className="space-y-6"><PremiumCard title="Pesquisar ativo" description="Selecione uma ação para calcular os métodos." icon={Search}><SearchBox label="Ativo" value={search} onChange={setSearch} assets={assets} onSelect={(asset) => { setSelectedAsset(asset); setSearch(asset.ticker); }} /><div className="mt-4 grid gap-3 sm:grid-cols-2"><InfoTile label="Ativo" value={`${selectedAsset.ticker} - ${selectedAsset.name}`} /><InfoTile label="Última atualização" value={new Date(selectedAsset.lastUpdatedAt ?? selectedAsset.updatedAt).toLocaleString("pt-BR")} /><InfoTile label="Fonte" value={selectedAsset.sourceLabel ?? (selectedAsset.source === "external" ? "Google Finance via provedor externo" : "Base interna/fornecedor")} /><InfoTile label="Tipo" value={typeLabels[selectedAsset.type]} /></div></PremiumCard>{currentUser.role === "ADMIN" && <PremiumCard title="Configuração administrativa" description="Parâmetros oficiais para Y, crescimento e score." icon={Settings}><div className="grid gap-3"><Input label="Y padrão (%)" type="number" step="0.1" value={settings.defaultY} onChange={(e) => saveSettings({ defaultY: Number(e.target.value) })} /><Input label="Crescimento mínimo (%)" type="number" value={settings.minGrowth} onChange={(e) => saveSettings({ minGrowth: Number(e.target.value) })} /><Input label="Crescimento máximo recomendado (%)" type="number" value={settings.maxGrowth} onChange={(e) => saveSettings({ maxGrowth: Number(e.target.value) })} /><Input label="Peso Graham no score" type="number" max="15" value={settings.scoreWeight} onChange={(e) => saveSettings({ scoreWeight: Math.min(15, Number(e.target.value)) })} /><Toggle label="Cálculo ativo" checked={settings.enabled} onChange={(value) => saveSettings({ enabled: value })} /><Toggle label="Cliente edita crescimento" checked={settings.clientsCanEditGrowth} onChange={(value) => saveSettings({ clientsCanEditGrowth: value })} /><Toggle label="Cliente edita Y" checked={settings.clientsCanEditY} onChange={(value) => saveSettings({ clientsCanEditY: value })} /></div><p className="mt-3 text-xs text-slate-500 dark:text-slate-400">Y exibido como parâmetro configurado pelo administrador quando não houver integração confiável para títulos corporativos AAA.</p></PremiumCard>}<GrahamExplanation /></div><div className="space-y-6"><GrahamNumberCard analysis={graham} /><GrahamGrowthCard price={selectedAsset.price} lpa={inputs.lpa} growth={growth} y={y} value={growthValue} potential={growthPotential} safetyMargin={growthMargin} sourceLabel={`Crescimento informado pelo usuário; Y: Parâmetro configurado pelo administrador`} updatedAt={new Date().toISOString()} scenarios={scenarios} warning={warning} canEdit={canEdit} onGrowthChange={(value) => settings.clientsCanEditGrowth || currentUser.role === "ADMIN" ? setGrowth(value) : undefined} onYChange={(value) => settings.clientsCanEditY || currentUser.role === "ADMIN" ? setY(value) : undefined} /></div></div></Section>;
+  return <Section title="Valuation Graham" subtitle="Dois métodos de Benjamin Graham com fontes, datas, premissas e limitações visíveis." eyebrow="Valuation"><div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]"><div className="space-y-6"><PremiumCard title="Pesquisar ativo" description="Selecione uma ação para calcular os métodos." icon={Search}><SearchBox label="Ativo" value={search} onChange={setSearch} assets={assets} onSelect={(asset) => { setSelectedAsset(asset); setSearch(asset.ticker); }} /><div className="mt-4 grid gap-3 sm:grid-cols-2"><InfoTile label="Ativo" value={`${selectedAsset.ticker} - ${selectedAsset.name}`} /><InfoTile label="Última atualização" value={new Date(selectedAsset.lastUpdatedAt ?? selectedAsset.updatedAt).toLocaleString("pt-BR")} /><InfoTile label="Fonte" value={externalDataSourceLabel(selectedAsset.sourceLabel, selectedAsset.source)} /><InfoTile label="Tipo" value={typeLabels[selectedAsset.type]} /></div></PremiumCard>{currentUser.role === "ADMIN" && <PremiumCard title="Configuração administrativa" description="Parâmetros oficiais para Y, crescimento e score." icon={Settings}><div className="grid gap-3"><Input label="Y padrão (%)" type="number" step="0.1" value={settings.defaultY} onChange={(e) => saveSettings({ defaultY: Number(e.target.value) })} /><Input label="Crescimento mínimo (%)" type="number" value={settings.minGrowth} onChange={(e) => saveSettings({ minGrowth: Number(e.target.value) })} /><Input label="Crescimento máximo recomendado (%)" type="number" value={settings.maxGrowth} onChange={(e) => saveSettings({ maxGrowth: Number(e.target.value) })} /><Input label="Peso Graham no score" type="number" max="15" value={settings.scoreWeight} onChange={(e) => saveSettings({ scoreWeight: Math.min(15, Number(e.target.value)) })} /><Toggle label="Cálculo ativo" checked={settings.enabled} onChange={(value) => saveSettings({ enabled: value })} /><Toggle label="Cliente edita crescimento" checked={settings.clientsCanEditGrowth} onChange={(value) => saveSettings({ clientsCanEditGrowth: value })} /><Toggle label="Cliente edita Y" checked={settings.clientsCanEditY} onChange={(value) => saveSettings({ clientsCanEditY: value })} /></div><p className="mt-3 text-xs text-slate-500 dark:text-slate-400">Y exibido como parâmetro configurado pelo administrador quando não houver integração confiável para títulos corporativos AAA.</p></PremiumCard>}<GrahamExplanation /></div><div className="space-y-6"><GrahamNumberCard analysis={graham} /><GrahamGrowthCard price={selectedAsset.price} lpa={inputs.lpa} growth={growth} y={y} value={growthValue} potential={growthPotential} safetyMargin={growthMargin} sourceLabel={`Crescimento informado pelo usuário; Y: Parâmetro configurado pelo administrador`} updatedAt={new Date().toISOString()} scenarios={scenarios} warning={warning} canEdit={canEdit} onGrowthChange={(value) => settings.clientsCanEditGrowth || currentUser.role === "ADMIN" ? setGrowth(value) : undefined} onYChange={(value) => settings.clientsCanEditY || currentUser.role === "ADMIN" ? setY(value) : undefined} /></div></div></Section>;
 }
 
 
@@ -1924,7 +2071,25 @@ function ChartRevenue({ payments }: { payments: Payment[] }) {
 function PieBlock({ data }: { data: Array<{ name: string; value: number }> }) {
   return <div className="h-80"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={data} dataKey="value" nameKey="name" innerRadius={65} outerRadius={110} paddingAngle={3}>{data.map((entry, index) => <Cell key={entry.name} fill={palette[index % palette.length]} />)}</Pie><Tooltip formatter={(value) => money.format(Number(value))} /></PieChart></ResponsiveContainer></div>;
 }
-function SettingsSection({ currentUser, darkMode, setDarkMode, settings, setSettings, changePassword, logout }: { currentUser: Account; darkMode: boolean; setDarkMode: (value: boolean) => void; settings: { currency: string; language: string; autoUpdate: boolean; priceAlerts: boolean; dividendAlerts: boolean }; setSettings: React.Dispatch<React.SetStateAction<{ currency: string; language: string; autoUpdate: boolean; priceAlerts: boolean; dividendAlerts: boolean }>>; changePassword: (event: React.FormEvent<HTMLFormElement>) => void; logout: () => void }) {
+function SettingsSection({
+  currentUser,
+  darkMode,
+  setDarkMode,
+  settings,
+  setSettings,
+  changePassword,
+  logout,
+  onAccountUpdated
+}: {
+  currentUser: Account;
+  darkMode: boolean;
+  setDarkMode: (value: boolean) => void;
+  settings: { currency: string; language: string; autoUpdate: boolean; priceAlerts: boolean; dividendAlerts: boolean };
+  setSettings: React.Dispatch<React.SetStateAction<{ currency: string; language: string; autoUpdate: boolean; priceAlerts: boolean; dividendAlerts: boolean }>>;
+  changePassword: (event: React.FormEvent<HTMLFormElement>) => void;
+  logout: () => void;
+  onAccountUpdated: (account: AccountIdentity) => void;
+}) {
   const [newPassword, setNewPassword] = useState("");
 
   return (
@@ -1932,9 +2097,16 @@ function SettingsSection({ currentUser, darkMode, setDarkMode, settings, setSett
       <div className="grid gap-6 lg:grid-cols-2">
         <PremiumCard title="Dados da conta" description="Informações do usuário autenticado." icon={UserCog}>
           <InfoTile label="Nome" value={currentUser.name} />
+          <div className="mt-3"><InfoTile label="E-mail" value={currentUser.email} /></div>
           <div className="mt-3"><InfoTile label="Perfil" value={currentUser.role === "ADMIN" ? "Administrador" : "Cliente"} /></div>
           <div className="mt-3"><InfoTile label="Status" value={currentUser.status} /></div>
           <button onClick={logout} className="mt-4 rounded-2xl bg-red-500 px-5 py-3 font-bold text-white"><LogOut className="mr-2 inline h-4 w-4" />Sair da conta</button>
+        </PremiumCard>
+        <PremiumCard title="Alterar nome" description="Atualize o nome exibido na plataforma." icon={UserCog}>
+          <ChangeNameForm account={currentUser} onUpdated={onAccountUpdated} />
+        </PremiumCard>
+        <PremiumCard title="Alterar e-mail" description="A troca exige senha e confirmação no novo endereço." icon={UserCog}>
+          <ChangeEmailForm currentEmail={currentUser.email} />
         </PremiumCard>
         <PremiumCard title="Alterar senha" description="A nova senha precisa cumprir todos os requisitos de segurança." icon={KeyRound}>
           <form onSubmit={changePassword} className="grid gap-3">
@@ -1944,25 +2116,29 @@ function SettingsSection({ currentUser, darkMode, setDarkMode, settings, setSett
             <button className="rounded-2xl bg-cyan-500 px-5 py-3 font-bold text-white">Alterar senha</button>
           </form>
         </PremiumCard>
-        <PremiumCard title="Tema e visual" description="Modo claro/escuro aplicado em toda a plataforma." icon={Moon}>
+        <PremiumCard title="Tema e visual" description="Modo claro ou escuro aplicado em toda a plataforma." icon={Moon}>
           <Toggle label="Modo escuro" checked={darkMode} onChange={setDarkMode} />
           <Toggle label="Atualização automática" checked={settings.autoUpdate} onChange={(value) => setSettings((current) => ({ ...current, autoUpdate: value }))} />
           <Toggle label="Alertas de preço" checked={settings.priceAlerts} onChange={(value) => setSettings((current) => ({ ...current, priceAlerts: value }))} />
           <Toggle label="Alertas de dividendos" checked={settings.dividendAlerts} onChange={(value) => setSettings((current) => ({ ...current, dividendAlerts: value }))} />
         </PremiumCard>
         <PremiumCard title="Localização" description="Moeda e idioma da interface." icon={Settings}>
-          <Select label="Moeda" value={settings.currency} onChange={(e) => setSettings((current) => ({ ...current, currency: e.target.value }))}>
+          <Select label="Moeda" value={settings.currency} onChange={(event) => setSettings((current) => ({ ...current, currency: event.target.value }))}>
             <option value="BRL">Real brasileiro</option>
             <option value="USD">Dólar americano</option>
           </Select>
           <div className="mt-3">
-            <Select label="Idioma" value={settings.language} onChange={(e) => setSettings((current) => ({ ...current, language: e.target.value }))}>
+            <Select label="Idioma" value={settings.language} onChange={(event) => setSettings((current) => ({ ...current, language: event.target.value }))}>
               <option value="pt-BR">Português Brasil</option>
               <option value="en-US">English</option>
             </Select>
           </div>
         </PremiumCard>
-      </div>
+        {currentUser.role === "ADMIN" && (
+          <PremiumCard title="Saúde do sistema - E-mail" description="Configuração SMTP, conexão, histórico e envio de teste." icon={MailCheck}>
+            <EmailHealthPanel />
+          </PremiumCard>
+        )}      </div>
     </Section>
   );
 }
@@ -1980,7 +2156,7 @@ function buildFinancialSummary(clients: Account[], plans: Plan[], payments: Paym
 }
 function buildEquityCurve(lines: ReturnType<typeof analyzePortfolio>["lines"]) {
   const map = new Map<string, number>();
-  lines.forEach((line) => line.asset.priceHistory.slice(-36).forEach((point) => map.set(point.label, (map.get(point.label) ?? 0) + point.price * line.quantity)));
+  lines.forEach((line) => line.asset.priceHistory.slice(-36).forEach((point) => map.set(point.label, (map.get(point.label) ?? 0) + multiplyDecimalToNumber(line.quantity, point.price))));
   return Array.from(map.entries()).map(([label, value]) => ({ label, value: Number(value.toFixed(2)) }));
 }
 function radarLabel(key: string) {

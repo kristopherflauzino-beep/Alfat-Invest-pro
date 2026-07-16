@@ -2,6 +2,7 @@ import type { AlfatecCryptoAnalysis } from "@/lib/analysis/alfatec-crypto";
 import type { AlfatecFiiAnalysis } from "@/lib/analysis/alfatec-fii";
 import type { Asset, PortfolioAnalysis } from "@/lib/types";
 import { analisarNumeroGraham } from "@/lib/valuation/graham";
+import { decimalToNumber } from "@/lib/decimal/crypto-quantity";
 import {
   reportCell,
   reportDisclaimer,
@@ -107,7 +108,7 @@ function portfolioTable(input: ClientReportInput) {
       { key: "averagePrice", label: "Preço médio" }, { key: "price", label: "Preço atual" }, { key: "equity", label: "Patrimônio" },
       { key: "profit", label: "Lucro/Prejuízo" }, { key: "return", label: "Rentabilidade" }, { key: "weight", label: "Peso" }
     ],
-    rows: input.portfolio.lines.map((line) => [text(line.ticker), text(line.asset.type), number(line.quantity), money(line.averagePrice), money(line.asset.price), money(line.currentValue), money(line.profit), percent(line.profitability), percent(line.weight)])
+    rows: input.portfolio.lines.map((line) => [text(line.ticker), text(line.asset.type), text(line.quantity), money(decimalToNumber(line.averagePrice)), money(line.asset.price), money(line.currentValue), money(line.profit), percent(line.profitability), percent(line.weight)])
   };
 }
 
@@ -166,7 +167,7 @@ export function buildClientReport(input: ClientReportInput): ReportDocumentData 
     { id: "allocation-class", group: "Distribuição", title: "Distribuição por classe", table: { columns: [{ key: "class", label: "Classe" }, { key: "value", label: "Valor" }, { key: "share", label: "Participação" }], rows: allocationClass.map((item) => [text(item.name), money(item.value), percent(item.percent)]) }, chart: { title: "Participação por classe", items: allocationClass.map((item) => ({ label: item.name, value: item.percent })), format: "percent" } },
     { id: "allocation-sector", group: "Distribuição", title: "Distribuição por setor", table: { columns: [{ key: "sector", label: "Setor" }, { key: "value", label: "Valor" }, { key: "share", label: "Participação" }], rows: allocationSector.map((item) => [text(item.name), money(item.value), percent(item.percent)]) }, chart: { title: "Participação por setor", items: allocationSector.map((item) => ({ label: item.name, value: item.percent })), format: "percent" } },
     { id: "assets", group: "Carteira", title: "Ativos da carteira", table: portfolioTable(input), unavailableReason: p.lines.length ? undefined : "Nenhum ativo cadastrado na carteira." },
-    { id: "movements", group: "Histórico", title: "Histórico de movimentações", description: "Entradas registradas na carteira; não representa extrato da corretora.", table: { columns: [{ key: "date", label: "Data" }, { key: "ticker", label: "Ativo" }, { key: "quantity", label: "Quantidade" }, { key: "price", label: "Preço médio" }, { key: "broker", label: "Corretora" }], rows: p.lines.map((line) => [date(line.purchaseDate), text(line.ticker), number(line.quantity), money(line.averagePrice), text(line.broker)]) }, unavailableReason: p.lines.length ? undefined : "Nenhuma movimentação registrada." },
+    { id: "movements", group: "Histórico", title: "Histórico de movimentações", description: "Entradas registradas na carteira; não representa extrato da corretora.", table: { columns: [{ key: "date", label: "Data" }, { key: "ticker", label: "Ativo" }, { key: "quantity", label: "Quantidade" }, { key: "price", label: "Preço médio" }, { key: "broker", label: "Corretora" }], rows: p.lines.map((line) => [date(line.purchaseDate), text(line.ticker), text(line.quantity), money(decimalToNumber(line.averagePrice)), text(line.broker)]) }, unavailableReason: p.lines.length ? undefined : "Nenhuma movimentação registrada." },
     { id: "benchmark", group: "Análises", title: "Benchmark", unavailableReason: unavailable },
     { id: "opportunities", group: "Análises", title: "Oportunidades analisadas", description: "Scores são referências analíticas e não recomendações.", table: { columns: [{ key: "ticker", label: "Ativo" }, { key: "method", label: "Método" }, { key: "score", label: "Score/valor" }, { key: "confidence", label: "Confiança" }], rows: [...fiiRows.slice(0, 8).map(({ analysis }) => [text(analysis.ticker), text("AlfaTec FIIs"), number(analysis.score), text(analysis.confidence)]), ...cryptoRows.slice(0, 8).map((analysis) => [text(analysis.ticker), text("AlfaTec Cripto"), number(analysis.score), text(analysis.confidence)])] }, unavailableReason: !fiiRows.length && !cryptoRows.length ? unavailable : undefined },
     { id: "risks", group: "Análises", title: "Riscos e concentrações", bullets: p.alerts },

@@ -30,6 +30,7 @@ export type AssetMetrics = {
   profit?: number;
   cagr?: number;
   debtToEquity?: number;
+  netDebtToEbitda?: number;
   freeCashFlow?: number;
   vacancyPhysical?: number;
   vacancyFinancial?: number;
@@ -107,8 +108,9 @@ export type Asset = {
 export type PortfolioPosition = {
   id: string;
   ticker: string;
-  quantity: number;
-  averagePrice: number;
+  quantity: string;
+  averagePrice: string;
+  assetType?: AssetType;
   broker: string;
   purchaseDate: string;
 };

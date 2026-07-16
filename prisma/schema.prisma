@@ -56,21 +56,25 @@ model AlertRule {
 }
 
 model AppUser {
-  id           String    @id @default(cuid())
-  role         String
-  username     String    @unique
-  email        String    @unique
-  name         String
-  phone        String?
-  passwordHash String
-  planId       String?
-  planValue    Float?
-  status       String    @default("ativo")
-  dueDate      DateTime?
-  notes        String?
-  permissions  Json
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  id              String    @id @default(cuid())
+  role            String
+  username        String    @unique
+  email           String    @unique
+  name            String
+  phone           String?
+  passwordHash    String
+  planId          String?
+  planValue       Float?
+  status          String    @default("ativo")
+  dueDate         DateTime?
+  notes           String?
+  permissions     Json
+  emailVerifiedAt DateTime?
+  nameChangeCount Int       @default(0)
+  nameChangedAt   DateTime?
+  emailChangedAt  DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   payments Payment[]
 }
@@ -208,4 +212,94 @@ model PaymentAuditLog {
 
   @@index([userId, createdAt])
   @@index([action])
+}
+
+model EmailChangeToken {
+  id          String    @id @default(cuid())
+  userId      String
+  newEmail    String
+  tokenHash   String    @unique
+  expiresAt   DateTime
+  usedAt      DateTime?
+  requestedAt DateTime
+  createdAt   DateTime  @default(now())
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+}
+
+model EmailDelivery {
+  id                String    @id
+  userId            String?
+  recipient         String
+  recipientMasked   String
+  type              String
+  subject           String
+  status            String
+  provider          String
+  providerMessageId String?
+  attempts          Int       @default(0)
+  lastAttemptAt     DateTime?
+  sentAt            DateTime?
+  errorCode         String?
+  errorMessage      String?
+  idempotencyKey    String?   @unique
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([status, createdAt])
+}
+
+model PendingRegistration {
+  id                     String    @id
+  name                   String
+  username               String
+  email                  String
+  phone                  String?
+  passwordHash           String
+  emailVerifiedAt        DateTime?
+  continuationTokenHash  String?   @unique
+  acceptedTermsAt        DateTime
+  acceptedPrivacyAt      DateTime
+  acceptedMarketingAt    DateTime?
+  planId                 String
+  planName               String
+  planPriceInCents       Int
+  durationDays           Int
+  permissions            Json
+  status                 String
+  paymentProvider        String    @default("mercado_pago")
+  paymentLinkOpenedAt    DateTime?
+  paymentReportedAt      DateTime?
+  paymentConfirmedAt     DateTime?
+  paymentName            String?
+  approximatePaymentDate DateTime?
+  transactionId          String?
+  customerNote           String?
+  paymentNotes           String?
+  adminNote              String?
+  confirmedByUserId      String?
+  activatedAt            DateTime?
+  rejectedAt             DateTime?
+  cancelledAt            DateTime?
+  expiresAt              DateTime
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  @@index([email, status])
+  @@index([username, status])
+  @@index([expiresAt])
+}
+
+model EmailVerificationToken {
+  id                    String    @id
+  pendingRegistrationId String
+  tokenHash             String    @unique
+  expiresAt             DateTime
+  usedAt                DateTime?
+  requestedAt           DateTime
+  createdAt             DateTime  @default(now())
+
+  @@index([pendingRegistrationId, createdAt])
+  @@index([expiresAt])
 }

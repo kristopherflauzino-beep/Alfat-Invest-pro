@@ -93,6 +93,19 @@ export async function requireAdmin(request: Request) {
   return account;
 }
 
+export type AdminPermission = "manage_user_name" | "manage_user_email";
+const adminPermissions: AdminPermission[] = ["manage_user_name", "manage_user_email"];
+
+export async function requireAdminPermission(request: Request, permission: AdminPermission) {
+  const account = await requireAdmin(request);
+  const explicitPermissions = account.permissions.filter((item): item is AdminPermission =>
+    adminPermissions.includes(item as AdminPermission)
+  );
+  if (explicitPermissions.length > 0 && !explicitPermissions.includes(permission)) {
+    throw new AuthError(403, "Permissao administrativa insuficiente.");
+  }
+  return account;
+}
 export function authErrorResponse(error: unknown) {
   if (error instanceof AuthError) return NextResponse.json({ error: error.message }, { status: error.status });
   return NextResponse.json({ error: "Nao foi possivel validar a sessao." }, { status: 500 });
