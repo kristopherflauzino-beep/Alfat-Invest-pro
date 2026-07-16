@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, Clock3, RefreshCw, Save, ShieldCheck, XCircle } from "lucide-react";
+import { CheckCircle2, Clock3, MailCheck, RefreshCw, Save, ShieldCheck, XCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 type Item = {
@@ -49,6 +49,7 @@ export function AdminPendingRegistrations() {
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [working, setWorking] = useState("");
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
   const load = useCallback(async () => {
     const response = await fetch("/api/admin/pending-registrations", { cache: "no-store" });
     const body = await response.json().catch(() => ({}));
@@ -75,6 +76,7 @@ export function AdminPendingRegistrations() {
     if (!draft || !window.confirm("Confirma esta ação administrativa?")) return;
     setWorking(item.id + action);
     setError("");
+    setMessage("");
     try {
       const response = await fetch("/api/admin/pending-registrations/" + item.id, {
         method: "PATCH",
@@ -91,9 +93,29 @@ export function AdminPendingRegistrations() {
     }
   }
 
+  async function resendEmail(item: Item) {
+    setWorking(item.id + ":resend");
+    setError("");
+    setMessage("");
+    try {
+      const response = await fetch("/api/admin/pending-registrations/" + item.id + "/resend-email", {
+        method: "POST"
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "Não foi possível reenviar a confirmação.");
+      setMessage(body.message || "E-mail de confirmação reenviado.");
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Não foi possível reenviar a confirmação.");
+    } finally {
+      setWorking("");
+    }
+  }
+
   return <section className="mb-6 space-y-4 rounded-3xl border border-slate-200 bg-white p-5 dark:border-white/10 dark:bg-slate-950">
     <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-lg font-black">Cadastros aguardando pagamento</h3><p className="text-sm text-slate-500 dark:text-slate-300">A conta só é criada após confirmar o pagamento e ativar manualmente.</p></div><button type="button" onClick={() => void load()} className="rounded-xl bg-slate-950 p-3 text-white dark:bg-white dark:text-slate-950" aria-label="Atualizar cadastros"><RefreshCw className="h-4 w-4" /></button></div>
     {error && <p className="rounded-xl bg-red-500/10 p-3 text-sm font-semibold text-red-800 dark:text-red-200">{error}</p>}
+    {message && <p className="rounded-xl bg-emerald-500/10 p-3 text-sm font-semibold text-emerald-800 dark:text-emerald-200">{message}</p>}
     <div className="space-y-3">
       {operational.map((item) => {
         const draft = drafts[item.id];
@@ -110,6 +132,7 @@ export function AdminPendingRegistrations() {
             <Field label="Observação" value={draft.adminNote} onChange={(value) => update(item.id, "adminNote", value)} />
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
+            {item.status === "awaiting_email_confirmation" && <Button icon={MailCheck} label="Reenviar confirmação" disabled={Boolean(working)} onClick={() => void resendEmail(item)} />}
             {["awaiting_payment", "payment_under_review"].includes(item.status) && <Button icon={CheckCircle2} label="Confirmar pagamento" disabled={Boolean(working)} onClick={() => void act(item, "confirm_payment")} />}
             {item.status === "paid" && <Button icon={ShieldCheck} label="Ativar conta" disabled={Boolean(working)} onClick={() => void act(item, "activate")} />}
             {!["paid", "activated"].includes(item.status) && <Button icon={XCircle} label="Recusar" disabled={Boolean(working)} onClick={() => void act(item, "reject")} />}
