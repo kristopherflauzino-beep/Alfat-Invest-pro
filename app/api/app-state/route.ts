@@ -6,6 +6,7 @@ import { hasDatabaseUrl, prisma } from "@/lib/prisma";
 import { revokeUserSessions, sessionUserId } from "@/lib/auth/session";
 import { inferAssetType, normalizeTicker } from "@/lib/market-data";
 import { CRYPTO_MAX_DECIMAL_PLACES, validateAssetQuantity, validateDecimalInput } from "@/lib/decimal/crypto-quantity";
+import { FREE_PORTFOLIO_LIMIT, freePlanPermissions, isFreePlan } from "@/lib/plans/access";
 
 export const runtime = "nodejs";
 
@@ -38,6 +39,7 @@ type AppStatePayload = {
 
 const allClientModules = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "alfatec_portfolio_method", "radar", "notificacoes", "relatorios", "graham_valuation", "alfatec_fiis", "alfatec_crypto_method", "plano", "configuracoes"];
 const appStateBlobPath = process.env.APP_STATE_BLOB_PATH || "alfatec-invest-pro/app-state.json";
+const defaultFreePlan = { id: "free", name: "FREE", value: 0, durationDays: 36500, status: "ativo", permissions: [...freePlanPermissions], updatedBy: "Sistema" };
 const defaultGrahamSettings = { defaultY: 5.5, minGrowth: 0, maxGrowth: 20, scoreWeight: 10, enabled: true, clientsCanEditGrowth: true, clientsCanEditY: false };
 const defaultFiiWeights = { qualidade: 20, renda: 18, risco: 16, valuation: 14, gestao: 12, liquidez: 6, diversificacao: 14 };
 const defaultFiiSettings = { enabled: true, referenceRate: 6.5, referenceRateSource: "Parametro configurado pelo administrador", minimumConfidence: "Media", weightsByKind: { tijolo: { qualidade: 20, renda: 20, risco: 15, valuation: 15, gestao: 10, liquidez: 5, diversificacao: 15 }, renda_urbana: { qualidade: 20, renda: 20, risco: 15, valuation: 15, gestao: 10, liquidez: 5, diversificacao: 15 }, papel: { qualidade: 25, renda: 15, risco: 20, valuation: 10, gestao: 10, liquidez: 5, diversificacao: 15 }, fof: { qualidade: 25, renda: 15, risco: 10, valuation: 15, gestao: 20, liquidez: 5, diversificacao: 10 }, hibrido: defaultFiiWeights, desenvolvimento: { qualidade: 20, renda: 10, risco: 25, valuation: 15, gestao: 15, liquidez: 5, diversificacao: 10 }, infraestrutura: { qualidade: 20, renda: 20, risco: 15, valuation: 15, gestao: 10, liquidez: 5, diversificacao: 15 }, outro: { qualidade: 18, renda: 18, risco: 18, valuation: 16, gestao: 10, liquidez: 8, diversificacao: 12 } } };
@@ -60,6 +62,7 @@ const defaultState: AppStatePayload = {
     },
   ],
   plans: [
+    defaultFreePlan,
     { id: "semanal", name: "Semanal", value: 9.9, durationDays: 7, status: "ativo", permissions: allClientModules },
     { id: "mensal", name: "Mensal", value: 24.9, durationDays: 30, status: "ativo", permissions: allClientModules },
     { id: "anual", name: "Anual", value: 199.9, durationDays: 365, status: "ativo", permissions: allClientModules }
@@ -128,6 +131,11 @@ function mergeDefaultAccounts(accounts: unknown[]) {
   return merged;
 }
 
+function mergeDefaultPlans(plans: unknown[]) {
+  const merged = [...plans];
+  if (!merged.some((plan) => stringField(plan, "id") === "free")) merged.unshift(defaultFreePlan);
+  return merged;
+}
 function ensureNotificationPermission(value: unknown) {
   if (!value || typeof value !== "object") return value;
   const item = value as Record<string, unknown>;
@@ -138,7 +146,7 @@ function normalizeState(value: unknown): AppStatePayload {
   const input = value && typeof value === "object" ? value as Partial<AppStatePayload> : {};
   return {
     accounts: mergeDefaultAccounts(Array.isArray(input.accounts) ? input.accounts : []).map(ensureNotificationPermission),
-    plans: (Array.isArray(input.plans) && input.plans.length > 0 ? input.plans : defaultState.plans).map(ensureNotificationPermission),
+    plans: mergeDefaultPlans(Array.isArray(input.plans) && input.plans.length > 0 ? input.plans : defaultState.plans).map(ensureNotificationPermission),
     payments: Array.isArray(input.payments) ? input.payments : [],
     portfolio: Array.isArray(input.portfolio) ? input.portfolio : [],
     planPriceHistory: Array.isArray(input.planPriceHistory) ? input.planPriceHistory : [],
@@ -404,6 +412,14 @@ export async function PUT(request: Request) {
     const incoming = normalizeState(await request.json());
     const normalizedPortfolio = normalizePortfolioPayload(incoming.portfolio);
     if (!normalizedPortfolio.ok) return NextResponse.json({ error: normalizedPortfolio.error }, { status: 422 });
+    const actorPlanId = stringField(actor, "planId");
+    const actorPlan = current.plans.find((plan) => stringField(plan, "id") === actorPlanId);
+    const actorPlanName = actorPlan && typeof actorPlan === "object" ? String((actorPlan as Record<string, unknown>).name ?? "") : "";
+    if (role !== "ADMIN" && isFreePlan(actorPlanId, actorPlanName) && normalizedPortfolio.value.length > FREE_PORTFOLIO_LIMIT) {
+      return NextResponse.json({
+        error: `Seu Plano Gratuito permite cadastrar até ${FREE_PORTFOLIO_LIMIT} ativos. Faça upgrade para cadastrar ativos ilimitados.`
+      }, { status: 403 });
+    }
     incoming.portfolio = normalizedPortfolio.value;
     let body: AppStatePayload;
     if (role === "ADMIN") {

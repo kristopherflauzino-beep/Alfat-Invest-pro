@@ -6,6 +6,7 @@ import { assertSameOrigin, requestErrorResponse } from "@/lib/server/request-sec
 import type { AppNotification } from "@/lib/notifications/notifications";
 import { ensurePlanLifecycleNotifications, dueEmailJobIds } from "@/lib/notifications/plan-lifecycle";
 import { deliverPlanEmailJob } from "@/lib/email/email-jobs";
+import { FREE_DAILY_NOTIFICATION_LIMIT, isFreePlan } from "@/lib/plans/access";
 
 export const runtime = "nodejs";
 const actionSchema = z.object({
@@ -26,13 +27,23 @@ export async function GET(request: Request) {
     const dueJobs = Array.from(new Set([...lifecycle.emailJobIds, ...dueEmailJobIds(state, account.id)]));
     for (const jobId of dueJobs) await deliverPlanEmailJob(jobId).catch(() => undefined);
     if (lifecycle.changed || dueJobs.length > 0) state = await readCoreState();
-    const notifications = (Array.isArray(state.notifications) ? state.notifications : [])
+    const plan = state.plans.find((item) => item.id === account.planId);
+    const free = account.role !== "ADMIN" && isFreePlan(account.planId, plan?.name);
+    const ownNotifications = (Array.isArray(state.notifications) ? state.notifications : [])
       .filter(isNotification)
       .filter((item) => item.userId === account.id)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const dailyCounts = new Map<string, number>();
+    const notifications = free ? ownNotifications.filter((item) => {
+      const day = item.createdAt.slice(0, 10);
+      const count = dailyCounts.get(day) ?? 0;
+      dailyCounts.set(day, count + 1);
+      return count < FREE_DAILY_NOTIFICATION_LIMIT;
+    }) : ownNotifications;
     return NextResponse.json({
       notifications,
-      unreadCount: notifications.filter((item) => !item.readAt).length
+      unreadCount: notifications.filter((item) => !item.readAt).length,
+      dailyLimit: free ? FREE_DAILY_NOTIFICATION_LIMIT : null
     }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     return authErrorResponse(error);

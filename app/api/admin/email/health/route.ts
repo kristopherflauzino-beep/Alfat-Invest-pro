@@ -4,7 +4,8 @@ import {
   emailConfigurationStatus,
   emailDeliveryStats,
   sendEmail,
-  verifyEmailConnection
+  verifyEmailConnection,
+  verifyEmailLogoAsset
 } from "@/lib/email/email-service";
 import { emailLayout } from "@/lib/email/templates/base";
 import { authErrorResponse, requireAdmin } from "@/lib/auth/session";
@@ -13,18 +14,26 @@ import { assertSameOrigin } from "@/lib/server/request-security";
 
 export const runtime = "nodejs";
 const schema = z.object({
-  action: z.enum(["verify", "send_test"]),
+  action: z.enum(["verify", "check_logo", "send_test"]),
   recipient: z.string().trim().email().max(254).optional()
 }).strict();
 
 export async function GET(request: Request) {
   try {
-    await requireAdmin(request);
-    const [configuration, deliveries] = await Promise.all([
+    const admin = await requireAdmin(request);
+    const [configuration, deliveries, logo] = await Promise.all([
       Promise.resolve(emailConfigurationStatus()),
-      emailDeliveryStats()
+      emailDeliveryStats(),
+      verifyEmailLogoAsset()
     ]);
-    return NextResponse.json({ configuration, deliveries }, { headers: { "Cache-Control": "private, no-store" } });
+    const previewHtml = emailLayout({
+      preheader: "Prévia do modelo de e-mail AlfaTec Invest Pro.",
+      title: "Prévia do modelo de e-mail",
+      greeting: `Olá, ${admin.name}.`,
+      paragraphs: ["Este é o modelo visual utilizado nas mensagens transacionais da plataforma.", "O conteúdo permanece legível mesmo quando o cliente de e-mail bloqueia imagens externas."],
+      details: [{ label: "Remetente", value: configuration.fromAddress || "Não configurado" }]
+    });
+    return NextResponse.json({ configuration, deliveries, logo, previewHtml }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     return authErrorResponse(error);
   }
@@ -39,6 +48,10 @@ export async function POST(request: Request) {
 
     if (parsed.data.action === "verify") {
       const result = await verifyEmailConnection();
+      return NextResponse.json(result, { status: result.ok ? 200 : 503 });
+    }
+    if (parsed.data.action === "check_logo") {
+      const result = await verifyEmailLogoAsset();
       return NextResponse.json(result, { status: result.ok ? 200 : 503 });
     }
     if (!parsed.data.recipient) return NextResponse.json({ error: "Informe o destinatário do teste." }, { status: 422 });

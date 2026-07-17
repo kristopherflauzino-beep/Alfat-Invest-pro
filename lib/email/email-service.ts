@@ -2,6 +2,7 @@ import "server-only";
 import nodemailer from "nodemailer";
 import type { Transporter } from "nodemailer";
 import { hasDatabaseUrl, prisma } from "@/lib/prisma";
+import { officialEmailLogoUrl } from "@/lib/email/templates/base";
 
 export type EmailMessage = {
   to: string;
@@ -269,6 +270,38 @@ export async function sendEmail(message: EmailMessage): Promise<EmailDeliveryRes
   }
 }
 
+export async function verifyEmailLogoAsset() {
+  const url = officialEmailLogoUrl();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 7_000);
+  try {
+    const response = await fetch(url, { method: "HEAD", cache: "no-store", redirect: "error", signal: controller.signal });
+    const contentType = response.headers.get("content-type") || "";
+    const size = Number(response.headers.get("content-length") || 0) || null;
+    const ok = response.ok && contentType.toLowerCase().startsWith("image/png");
+    return {
+      ok,
+      url,
+      status: response.status,
+      contentType,
+      size,
+      checkedAt: new Date().toISOString(),
+      error: ok ? null : "O logo público não respondeu como imagem PNG."
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      url,
+      status: null,
+      contentType: "",
+      size: null,
+      checkedAt: new Date().toISOString(),
+      error: error instanceof Error && error.name === "AbortError" ? "Tempo limite ao verificar o logo público." : "Não foi possível verificar o logo público."
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 export async function emailDeliveryStats() {
   if (!hasDatabaseUrl) return { pending: 0, failed: 0, sent: 0, lastSuccessAt: null, lastErrorAt: null, lastError: null };
   await ensureEmailDeliveryTable();

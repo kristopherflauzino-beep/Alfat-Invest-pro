@@ -2,6 +2,7 @@
 
 import { Check, Eye, EyeOff, MailCheck, ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { isFreePlan } from "@/lib/plans/access";
 
 export type PublicRegistrationPayload = {
   name: string;
@@ -38,7 +39,7 @@ export function PendingRegistrationForm({
   databaseError: string;
   onRegister: (payload: PublicRegistrationPayload) => Promise<PublicRegistrationResult>;
 }) {
-  const activePlans = useMemo(() => plans.filter((plan) => plan.status === "ativo"), [plans]);
+  const activePlans = useMemo(() => plans.filter((plan) => plan.status === "ativo" && !isFreePlan(plan.id, plan.name) && plan.value > 0), [plans]);
   const [planId, setPlanId] = useState(activePlans[0]?.id || "");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");

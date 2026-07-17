@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { authErrorResponse, requireAccount } from "@/lib/auth/session";
 import { readCoreState, writeCoreState } from "@/lib/server/core-state";
+import { isFreePlan, isFreeReportExportAllowed } from "@/lib/plans/access";
 
 export const runtime = "nodejs";
 
@@ -33,6 +34,10 @@ export async function POST(request: Request) {
     if (input.targetUserId !== actor.id && actor.role !== "ADMIN") return NextResponse.json({ error: "Você só pode exportar seus próprios dados." }, { status: 403 });
     const state = await readCoreState();
     if (!state.accounts.some((account) => account.id === input.targetUserId)) return NextResponse.json({ error: "Usuário do relatório não encontrado." }, { status: 404 });
+    const actorPlan = state.plans.find((plan) => plan.id === actor.planId);
+    if (actor.role !== "ADMIN" && isFreePlan(actor.planId, actorPlan?.name) && !isFreeReportExportAllowed(input.format, input.sections)) {
+      return NextResponse.json({ error: "O Plano FREE permite somente o relat?rio resumido em PDF." }, { status: 403 });
+    }
     const now = Date.now();
     const windowStart = now - 10 * 60 * 1_000;
     const events = Array.isArray(state.reportRateEvents) ? state.reportRateEvents as Array<{ userId?: string; createdAt?: string }> : [];

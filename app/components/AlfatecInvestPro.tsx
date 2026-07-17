@@ -46,7 +46,7 @@ import {
   WalletCards,
   X
 } from "lucide-react";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -126,11 +126,9 @@ import { MercadoPagoLinkCheckout } from "@/components/subscriptions/MercadoPagoL
 import { AdminSubscriptionRequests } from "@/components/subscriptions/AdminSubscriptionRequests";
 import { AlfatecPortfolioMethod } from "@/components/portfolio/AlfatecPortfolioMethod";
 import { CryptoQuantityInput } from "@/components/portfolio/CryptoQuantityInput";
-import { DecimalValueDisplay } from "@/components/portfolio/DecimalValueDisplay";
-import { PortfolioPositionEditor } from "@/components/portfolio/PortfolioPositionEditor";
+import { PortfolioPositionsTable } from "@/components/portfolio/PortfolioPositionsTable";
 import {
   CRYPTO_MAX_DECIMAL_PLACES,
-  decimalToNumber,
   multiplyDecimalToNumber,
   validateAssetQuantity,
   validateDecimalInput
@@ -149,6 +147,7 @@ import { ExternalFinanceLink } from "@/components/assets/ExternalFinanceLink";
 import { externalDataSourceLabel } from "@/lib/assets/external-finance-url";
 import { StockOpportunityFilters } from "@/components/opportunities/StockOpportunityFilters";
 import { defaultStockOpportunityFilters, filterAndSortStockOpportunities, type StockOpportunityFilterState } from "@/lib/opportunities/stock-filters";
+import { FREE_PORTFOLIO_LIMIT, freePlanPermissions, isFreeLockedModule, isFreePlan } from "@/lib/plans/access";
 
 type Role = "ADMIN" | "CLIENTE";
 type ClientStatus = "ativo" | "pendente" | "bloqueado" | "vencido";
@@ -291,6 +290,7 @@ const ranges: Array<{ id: RangeId; label: string; points: number }> = [
 const suggestedPlanValues: Record<string, number> = { semanal: 9.9, mensal: 24.9, anual: 199.9 };
 const legacyPlanValues: Record<string, number[]> = { semanal: [49.9], mensal: [149.9], anual: [1299.9] };
 const defaultPlans: Plan[] = [
+  { id: "free", name: "FREE", value: 0, durationDays: 36500, status: "ativo", permissions: [...freePlanPermissions] as ClientModuleId[] },
   { id: "semanal", name: "Semanal", value: suggestedPlanValues.semanal, durationDays: 7, status: "ativo", permissions: allClientModules },
   { id: "mensal", name: "Mensal", value: suggestedPlanValues.mensal, durationDays: 30, status: "ativo", permissions: allClientModules },
   { id: "anual", name: "Anual", value: suggestedPlanValues.anual, durationDays: 365, status: "ativo", permissions: allClientModules }
@@ -308,6 +308,14 @@ function cls(...values: Array<string | false | undefined | null>) {
 function pct(value?: number | null) {
   if (value === undefined || value === null || Number.isNaN(value)) return "-";
   return `${percent.format(value)}%`;
+}
+function signedMoney(value: number) {
+  if (value === 0) return money.format(0);
+  return `${value > 0 ? "+" : "-"}${money.format(Math.abs(value))}`;
+}
+function signedPct(value: number) {
+  if (value === 0) return pct(0);
+  return `${value > 0 ? "+" : "-"}${percent.format(Math.abs(value))}%`;
 }
 function pp(value?: number | null) {
   if (value === undefined || value === null || Number.isNaN(value)) return "-";
@@ -677,6 +685,7 @@ export default function AlfatecInvestPro() {
   const [newClientPassword, setNewClientPassword] = useState("Invest@2026!");
   const [databaseError, setDatabaseError] = useState("");
   const [clientModule, setClientModule] = useState<ClientModuleId>("dashboard");
+  const [upgradeResource, setUpgradeResource] = useState<"comparador" | "radar" | null>(null);
   const [adminModule, setAdminModule] = useState<ClientModuleId | AdminModuleId>("admin-dashboard");
   const [globalSearch, setGlobalSearch] = useState("");
   const [marketSearch, setMarketSearch] = useState("");
@@ -750,6 +759,8 @@ export default function AlfatecInvestPro() {
   const radarCryptoAnalyses = useMemo(() => filterCryptoAnalyses(cryptoAnalyses, radarCryptoFilters), [cryptoAnalyses, radarCryptoFilters]);
   const cryptoFilterCategories = useMemo(() => Array.from(new Map(cryptoAnalyses.map((item) => [item.category, { value: item.category, label: cryptoCategoryLabels[item.category] }])).values()), [cryptoAnalyses]);
   const currentUser = useMemo(() => accounts.find((account) => account.id === sessionId) ?? null, [accounts, sessionId]);
+  const currentPlan = useMemo(() => plans.find((plan) => plan.id === currentUser?.planId), [plans, currentUser?.planId]);
+  const isFreeUser = currentUser?.role === "CLIENTE" && isFreePlan(currentUser.planId, currentPlan?.name);
   const clients = useMemo(() => accounts.filter((account) => account.role === "CLIENTE"), [accounts]);
   const financial = useMemo(() => buildFinancialSummary(clients, plans, payments), [clients, plans, payments]);
   const globalSuggestions = useMemo(() => searchAssets(globalSearch, "TODOS", assets).slice(0, 8), [globalSearch, assets]);
@@ -757,7 +768,11 @@ export default function AlfatecInvestPro() {
   const returnA = performance(rangeHistory(assetA, range));
   const returnB = performance(rangeHistory(assetB, range));
   const comparisonRecommendation = useMemo(() => buildComparisonRecommendation(assetA, assetB, returnA, returnB, weights), [assetA, assetB, returnA, returnB, weights]);
-  const allowedClientModules = currentUser?.role === "CLIENTE" ? clientModules.filter((item) => currentUser.permissions.includes(item.id)) : clientModules;
+  const allowedClientModules = currentUser?.role === "CLIENTE"
+    ? clientModules
+        .filter((item) => currentUser.permissions.includes(item.id) || (isFreeUser && isFreeLockedModule(item.id)))
+        .map((item) => ({ ...item, locked: Boolean(isFreeUser && isFreeLockedModule(item.id)) }))
+    : clientModules;
   const adminNavigationModules = useMemo(() => [
     ...clientModules.map((item) => ({ ...item, group: "Área do cliente" })),
     ...adminModules
@@ -874,8 +889,13 @@ export default function AlfatecInvestPro() {
   useEffect(() => window.localStorage.setItem("alfatec-theme", darkMode ? "dark" : "light"), [darkMode]);
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("menu") as ClientModuleId | null;
-    if (requested && allClientModules.includes(requested)) { setClientModule(requested); if (currentUser?.role === "ADMIN") setAdminModule(requested); }
-  }, [currentUser?.role]);
+    if (requested && allClientModules.includes(requested)) {
+      if (isFreeUser && isFreeLockedModule(requested)) { setUpgradeResource(requested as "comparador" | "radar"); setClientModule("plano"); return; }
+      if (currentUser?.role === "CLIENTE" && !currentUser.permissions.includes(requested)) { setUpgradeResource(null); setClientModule("plano"); return; }
+      setClientModule(requested);
+      if (currentUser?.role === "ADMIN") setAdminModule(requested);
+    }
+  }, [currentUser?.role, isFreeUser]);
   useEffect(() => {
     const openReports = () => {
       setClientModule("relatorios");
@@ -883,7 +903,7 @@ export default function AlfatecInvestPro() {
     };
     window.addEventListener("alfatec:open-reports", openReports);
     return () => window.removeEventListener("alfatec:open-reports", openReports);
-  }, [currentUser?.role]);
+  }, [currentUser?.role, isFreeUser]);
   useEffect(() => setGrahamY(grahamSettings.defaultY), [grahamSettings.defaultY]);
   useEffect(() => { extraAssets.filter((asset) => asset.source === "external").forEach((asset) => window.localStorage.setItem("alfatec-quote-" + asset.ticker, JSON.stringify(asset))); }, [extraAssets]);
   async function refreshTicker(tickerInput: string, options: { select?: boolean; silent?: boolean; signal?: AbortSignal } = {}) {
@@ -1022,8 +1042,21 @@ export default function AlfatecInvestPro() {
     if (asset.source === "generated" && !extraAssets.some((item) => item.ticker === asset.ticker)) setExtraAssets((current) => [asset, ...current]);
   }
 
+  function addAssetToPortfolio(asset: Asset) {
+    if (isFreeUser && portfolio.length >= FREE_PORTFOLIO_LIMIT) {
+      setPortfolioFormError(`Seu Plano Gratuito permite cadastrar até ${FREE_PORTFOLIO_LIMIT} ativos. Faça upgrade para cadastrar ativos ilimitados.`);
+      setClientModule("carteira");
+      return;
+    }
+    setPortfolio((current) => [{ id: crypto.randomUUID(), ticker: asset.ticker, quantity: "1", averagePrice: String(asset.price), assetType: asset.type, broker: "Manual", purchaseDate: todayIso() }, ...current]);
+    setPortfolioFormError("");
+  }
   function addPortfolioPosition(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (isFreeUser && portfolio.length >= FREE_PORTFOLIO_LIMIT) {
+      setPortfolioFormError(`Seu Plano Gratuito permite cadastrar até ${FREE_PORTFOLIO_LIMIT} ativos. Faça upgrade para cadastrar ativos ilimitados.`);
+      return;
+    }
     const formData = new FormData(event.currentTarget);
     const ticker = normalizeTicker(portfolioTickerInput);
     const broker = String(formData.get("broker") ?? "").trim() || "Não informada";
@@ -1326,7 +1359,7 @@ export default function AlfatecInvestPro() {
   }
 
   return (
-    <Shell darkMode={darkMode} setDarkMode={setDarkMode} logout={logout} user={currentUser} modules={currentUser.role === "ADMIN" ? adminNavigationModules : allowedClientModules} activeId={currentUser.role === "ADMIN" ? adminModule : clientModule} onMenu={currentUser.role === "ADMIN" ? handleAdminMenu : (id) => { setGlobalSearch(""); setClientModule(id as ClientModuleId); }}>
+    <Shell darkMode={darkMode} setDarkMode={setDarkMode} logout={logout} user={currentUser} modules={currentUser.role === "ADMIN" ? adminNavigationModules : allowedClientModules} activeId={currentUser.role === "ADMIN" ? adminModule : clientModule} onMenu={currentUser.role === "ADMIN" ? handleAdminMenu : (id) => { setGlobalSearch(""); if (isFreeUser && isFreeLockedModule(id)) { setUpgradeResource(id as "comparador" | "radar"); setClientModule("plano"); return; } setUpgradeResource(null); setClientModule(id as ClientModuleId); }}>
       <div className="relative z-20">
         <GlobalSearchBox globalSearch={globalSearch} setGlobalSearch={setGlobalSearch} globalSuggestions={globalSuggestions} selectAsset={selectAsset} searchHistory={searchHistory} assets={assets} />
         {clientModule === "dashboard" && (
@@ -1359,7 +1392,7 @@ export default function AlfatecInvestPro() {
                   {marketQuoteMessage && <div className={cls("rounded-3xl border p-5 text-sm font-bold", marketQuoteStatus === "error" ? "border-amber-400/40 bg-amber-500/10 text-amber-600 dark:text-amber-300" : "border-cyan-400/40 bg-cyan-500/10 text-cyan-700 dark:text-cyan-200")}>{marketQuoteStatus === "loading" ? "Consultando cotação externa..." : marketQuoteMessage}</div>}
                 </div>
               </PremiumCard>
-              <AssetPanel asset={selectedAsset} favorites={favorites} setFavorites={setFavorites} onAddToPortfolio={(asset) => setPortfolio((current) => [{ id: crypto.randomUUID(), ticker: asset.ticker, quantity: "1", averagePrice: String(asset.price), assetType: asset.type, broker: "Manual", purchaseDate: todayIso() }, ...current])} onOpenFiiAnalysis={(asset) => { setFiiAsset(asset); setFiiSearch(asset.ticker); setClientModule("alfatec_fiis"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_fiis"); }} cryptoAnalysis={selectedAsset.type === "CRIPTO" ? cryptoAnalyses.find((item) => item.ticker === selectedAsset.ticker) ?? null : null} onOpenCryptoAnalysis={(asset) => { setCryptoTicker(asset.ticker); void loadCryptoData([asset.ticker]); setClientModule("alfatec_crypto_method"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_crypto_method"); }} />
+              <AssetPanel asset={selectedAsset} favorites={favorites} setFavorites={setFavorites} onAddToPortfolio={addAssetToPortfolio} basicMode={isFreeUser} onOpenFiiAnalysis={(asset) => { setFiiAsset(asset); setFiiSearch(asset.ticker); setClientModule("alfatec_fiis"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_fiis"); }} cryptoAnalysis={selectedAsset.type === "CRIPTO" ? cryptoAnalyses.find((item) => item.ticker === selectedAsset.ticker) ?? null : null} onOpenCryptoAnalysis={(asset) => { setCryptoTicker(asset.ticker); void loadCryptoData([asset.ticker]); setClientModule("alfatec_crypto_method"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_crypto_method"); }} />
             </div>
           </Section>
         )}
@@ -1375,16 +1408,18 @@ export default function AlfatecInvestPro() {
             {opportunityCategory === "ACAO" && (
               <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
                 <PremiumCard title="Filtros de Oportunidades em Ações" description="Critérios cumulativos de fundamentos, liquidez, confiança e Número de Graham." icon={Search}>
-                  <StockOpportunityFilters
-                    value={stockOpportunityFilters}
-                    onChange={setStockOpportunityFilters}
-                    sectors={stockOpportunitySectors}
-                    segments={stockOpportunitySegments}
-                    resultCount={stockOpportunityAssets.length}
-                  />
+                  {isFreeUser ? <FreeAccessSummary text="O Plano FREE mostra as 10 principais oportunidades do dia. Filtros avan?ados e score detalhado est?o dispon?veis nos planos pagos." /> : (
+                    <StockOpportunityFilters
+                      value={stockOpportunityFilters}
+                      onChange={setStockOpportunityFilters}
+                      sectors={stockOpportunitySectors}
+                      segments={stockOpportunitySegments}
+                      resultCount={stockOpportunityAssets.length}
+                    />
+                  )}
                 </PremiumCard>
                 <PremiumCard title="Oportunidades em ações" description="O Número de Graham é apenas um componente e a fórmula com crescimento não é usada nesta tela." icon={TrendingUp}>
-                  <GrahamOpportunityTable assets={stockOpportunityAssets.slice(0, 50)} onSelect={(asset) => selectAsset(asset, "mercado")} />
+                  {isFreeUser ? <FreeOpportunityList assets={stockOpportunityAssets.slice(0, 10)} onSelect={(asset) => selectAsset(asset, "mercado")} /> : <GrahamOpportunityTable assets={stockOpportunityAssets.slice(0, 50)} onSelect={(asset) => selectAsset(asset, "mercado")} />}
                   {!stockOpportunityAssets.length && <p className="mt-4 rounded-2xl bg-amber-500/10 p-4 text-sm font-semibold text-amber-800 dark:text-amber-200">Nenhuma ação atende aos filtros atuais. Dados ausentes de Graham não são substituídos por zero.</p>}
                 </PremiumCard>
               </div>
@@ -1392,15 +1427,15 @@ export default function AlfatecInvestPro() {
 
             {opportunityCategory === "FII" && (
               <PremiumCard title="Oportunidades em FIIs" description="Score AlfaTec FIIs, renda recorrente, risco, valuation, liquidez e confiança dos dados." icon={Building2}>
-                <FiiOpportunityFilters value={fiiFilters} onChange={(patch) => setFiiFilters((current) => ({ ...current, ...patch }))} segments={fiiSegments} />
-                <div className="mt-4"><FiiOpportunitiesTable items={fiiOpportunityAnalyses.slice(0, 50)} onSelect={(asset) => { setFiiAsset(asset); setFiiSearch(asset.ticker); setClientModule("alfatec_fiis"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_fiis"); }} /></div>
+                {isFreeUser ? <FreeAccessSummary text="Top 10 FIIs do dia no Plano FREE. Use um plano pago para acessar filtros e análise detalhada." /> : <FiiOpportunityFilters value={fiiFilters} onChange={(patch) => setFiiFilters((current) => ({ ...current, ...patch }))} segments={fiiSegments} />}
+                <div className="mt-4">{isFreeUser ? <FreeOpportunityList assets={fiiOpportunityAnalyses.slice(0, 10).map((item) => item.asset)} onSelect={(asset) => selectAsset(asset, "mercado")} /> : <FiiOpportunitiesTable items={fiiOpportunityAnalyses.slice(0, 50)} onSelect={(asset) => { setFiiAsset(asset); setFiiSearch(asset.ticker); setClientModule("alfatec_fiis"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_fiis"); }} />}</div>
               </PremiumCard>
             )}
 
             {opportunityCategory === "CRIPTO" && (
               <PremiumCard title="Oportunidades em criptoativos" description="Score AlfaTec Cripto com dados reais, categoria, mercado, tokenomics, risco e confiança." icon={Bitcoin}>
-                <CryptoOpportunityFilters value={cryptoFilters} onChange={(patch) => setCryptoFilters((current) => ({ ...current, ...patch }))} categories={cryptoFilterCategories} />
-                <div className="mt-4"><CryptoOpportunityTable items={cryptoOpportunityAnalyses} onSelect={(ticker) => { setCryptoTicker(ticker); setClientModule("alfatec_crypto_method"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_crypto_method"); }} /></div>
+                {isFreeUser ? <FreeAccessSummary text="Top 10 criptoativos do dia no Plano FREE. Filtros e score detalhado fazem parte dos planos pagos." /> : <CryptoOpportunityFilters value={cryptoFilters} onChange={(patch) => setCryptoFilters((current) => ({ ...current, ...patch }))} categories={cryptoFilterCategories} />}
+                <div className="mt-4">{isFreeUser ? <FreeOpportunityList assets={rankedAssets.filter((asset) => asset.type === "CRIPTO").slice(0, 10)} onSelect={(asset) => selectAsset(asset, "mercado")} /> : <CryptoOpportunityTable items={cryptoOpportunityAnalyses} onSelect={(ticker) => { setCryptoTicker(ticker); setClientModule("alfatec_crypto_method"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_crypto_method"); }} />}</div>
               </PremiumCard>
             )}
           </Section>
@@ -1426,12 +1461,18 @@ export default function AlfatecInvestPro() {
 
         {clientModule === "carteira" && (
           <Section title="Minha Carteira" subtitle="Cadastre ativos e acompanhe lucro, prejuízo, dividendos e concentração." eyebrow="Controle do usuário">
+            <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <InfoTile label="Capital investido" value={money.format(portfolioAnalysis.totalInvested)} />
+              <InfoTile label="Patrimônio atual" value={money.format(portfolioAnalysis.totalEquity)} />
+              <InfoTile label="Lucro / Prejuízo" value={signedMoney(portfolioAnalysis.totalProfit)} />
+              <InfoTile label="Rentabilidade" value={signedPct(portfolioAnalysis.profitability)} />
+            </div>
             <div className="mb-6 grid gap-4 sm:grid-cols-3">
               <InfoTile label="Dividendos por ciclo" value={money.format(portfolioDividendCycle)} />
               <InfoTile label="Dividendos/mês" value={money.format(portfolioAnalysis.projectedDividendsMonth)} />
               <InfoTile label="Dividendos/ano" value={money.format(portfolioAnalysis.projectedDividendsYear)} />
             </div>
-            <div className="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
+            <div className="grid min-w-0 gap-6 xl:grid-cols-[0.72fr_1.28fr]">
               <PremiumCard title="Adicionar ativo" description="Ticker, quantidade, preço médio, corretora e data." icon={Plus}>
                 <form onSubmit={addPortfolioPosition} className="grid gap-3">
                   <Input name="ticker" label="Ticker" placeholder="GARE11 ou BTC" value={portfolioTickerInput} onChange={(event) => setPortfolioTickerInput(event.target.value)} required />
@@ -1439,80 +1480,42 @@ export default function AlfatecInvestPro() {
                   <Input name="averagePrice" type="text" inputMode="decimal" label="Preço médio" value={portfolioAveragePriceInput} onChange={(event) => setPortfolioAveragePriceInput(event.target.value)} placeholder="0,00" required />
                   <Input name="broker" label="Corretora" placeholder="XP, Rico, BTG..." />
                   <Input name="purchaseDate" type="date" label="Data da compra" />
-                  {portfolioFormError && <p className="rounded-2xl bg-red-500/10 p-3 text-sm font-semibold text-red-700 dark:text-red-300">{portfolioFormError}</p>}
-                  <button className="rounded-2xl bg-teal-500 px-4 py-3 font-bold text-white">Adicionar à carteira</button>
+                  {isFreeUser && <p className="rounded-lg bg-cyan-500/10 p-3 text-sm font-semibold text-cyan-800 dark:text-cyan-200">Plano FREE: {portfolio.length} de {FREE_PORTFOLIO_LIMIT} posições utilizadas.</p>}
+                  {portfolioFormError && <p className="rounded-lg bg-red-500/10 p-3 text-sm font-semibold text-red-700 dark:text-red-300">{portfolioFormError}</p>}
+                  <button disabled={Boolean(isFreeUser && portfolio.length >= FREE_PORTFOLIO_LIMIT)} className="rounded-lg bg-teal-500 px-4 py-3 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">Adicionar à carteira</button>
                 </form>
               </PremiumCard>
-              <PremiumCard title="Posições" description="Análise automática das posições cadastradas." icon={WalletCards}>
-                <div className="overflow-x-auto">
-                  <table className="min-w-full text-sm">
-                    <thead>
-                      <tr className="text-left text-slate-500 dark:text-slate-300">
-                        <th className="p-3">Ativo</th><th className="p-3">Qtd.</th><th className="p-3">Preço médio</th>
-                        <th className="p-3">Atual</th><th className="p-3">Lucro/Prejuízo</th><th className="p-3">Div./ação</th>
-                        <th className="p-3">Freq.</th><th className="p-3">A receber</th><th className="p-3">Peso</th><th className="p-3">Ações</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {portfolioAnalysis.lines.map((line) => {
-                        const dividend = dividendPerShare(line.asset);
-                        const totalDividend = dividend === undefined ? undefined : multiplyDecimalToNumber(line.quantity, dividend);
-                        return (
-                          <Fragment key={line.id}>
-                            <tr className="border-t border-slate-100 dark:border-white/10">
-                              <td className="p-3 font-black">{line.ticker}<p className="text-xs font-normal text-slate-500 dark:text-slate-300">{typeLabels[line.asset.type]}</p></td>
-                              <td className="p-3"><DecimalValueDisplay value={line.quantity} expandable={line.asset.type === "CRIPTO"} /></td>
-                              <td className="p-3">{money.format(decimalToNumber(line.averagePrice))}</td>
-                              <td className="p-3">{money.format(line.asset.price)}</td>
-                              <td className={cls("p-3 font-black", line.profit >= 0 ? "text-emerald-500" : "text-red-500")}>{money.format(line.profit)}<p className="text-xs">{pct(line.profitability)}</p></td>
-                              <td className="p-3 font-semibold">{dividend === undefined ? "-" : money.format(dividend)}</td>
-                              <td className="p-3">{dividendFrequency(line.asset)}</td>
-                              <td className="p-3 font-black text-cyan-600 dark:text-cyan-300">{totalDividend === undefined ? "-" : money.format(totalDividend)}</td>
-                              <td className="p-3">{pct(line.weight)}</td>
-                              <td className="p-3">
-                                <div className="flex gap-1">
-                                  <button type="button" onClick={() => setEditingPortfolioId(line.id)} className="rounded-xl bg-cyan-500/10 p-2 text-cyan-600 dark:text-cyan-300" title="Editar posição" aria-label={"Editar posição " + line.ticker}><Pencil className="h-4 w-4" /></button>
-                                  <button type="button" onClick={() => setPortfolio((current) => current.filter((item) => item.id !== line.id))} className="rounded-xl bg-red-500/10 p-2 text-red-500" title="Excluir posição" aria-label={"Excluir posição " + line.ticker}><Trash2 className="h-4 w-4" /></button>
-                                </div>
-                              </td>
-                            </tr>
-                            {editingPortfolioId === line.id && (
-                              <tr className="border-t border-slate-100 dark:border-white/10">
-                                <td colSpan={10} className="p-3">
-                                  <PortfolioPositionEditor
-                                    position={line}
-                                    assetType={line.asset.type}
-                                    onCancel={() => setEditingPortfolioId(null)}
-                                    onSave={(quantity, averagePrice) => {
-                                      setPortfolio((current) => current.map((item) => item.id === line.id ? { ...item, quantity, averagePrice, assetType: line.asset.type } : item));
-                                      setEditingPortfolioId(null);
-                                    }}
-                                  />
-                                </td>
-                              </tr>
-                            )}
-                          </Fragment>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+              <PremiumCard title="Posições" description="Valores financeiros recalculados automaticamente com o preço atual." icon={WalletCards}>
+                <PortfolioPositionsTable
+                  lines={portfolioAnalysis.lines}
+                  editingId={editingPortfolioId}
+                  onEdit={setEditingPortfolioId}
+                  onDelete={(id) => setPortfolio((current) => current.filter((item) => item.id !== id))}
+                  onCancelEdit={() => setEditingPortfolioId(null)}
+                  onSaveEdit={(line, quantity, averagePrice) => {
+                    setPortfolio((current) => current.map((item) => item.id === line.id ? { ...item, quantity, averagePrice, assetType: line.asset.type } : item));
+                    setEditingPortfolioId(null);
+                  }}
+                  dividendPerShare={dividendPerShare}
+                  dividendFrequency={dividendFrequency}
+                />
               </PremiumCard>
-            </div>
+            </div>            {isFreeUser ? <UpgradeNotice title="Análises avançadas da carteira" description="Balanceamento inteligente, sugestões automáticas, simulações e alertas completos estão disponíveis nos planos pagos." onUpgrade={() => { setUpgradeResource(null); setClientModule("plano"); }} /> : (
             <div className="mt-6 grid gap-6 lg:grid-cols-2"><PremiumCard title="Análise IA da carteira" description="Diversificação, concentração, risco e dividendos." icon={BrainCircuit}><ul className="space-y-2">{portfolioAnalysis.aiSummary.map((item) => <li key={item} className="flex gap-2 text-sm"><ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-teal-500" />{item}</li>)}</ul></PremiumCard><PremiumCard title="Alertas automatizados" description="Condições de risco e concentração." icon={AlertTriangle}><ul className="space-y-2">{portfolioAnalysis.alerts.map((item) => <li key={item} className="flex gap-2 text-sm"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />{item}</li>)}</ul></PremiumCard></div>
+            )}
           </Section>
         )}
 
-        {clientModule === "graham_valuation" && <GrahamValuationSection assets={assets} selectedAsset={grahamAsset} search={grahamSearch} setSearch={setGrahamSearch} setSelectedAsset={setGrahamAsset} currentUser={currentUser} settings={grahamSettings} saveSettings={saveGrahamSettings} growth={grahamGrowth} setGrowth={setGrahamGrowth} y={grahamY} setY={setGrahamY} />}
+        {clientModule === "graham_valuation" && (isFreeUser ? <FreeMethodExplanation method="Método Graham" description="O método estima referências de preço a partir do lucro por ação, do valor patrimonial e, no modelo de crescimento, de premissas adicionais. Os cálculos completos e a margem de segurança estão disponíveis nos planos pagos." onUpgrade={() => setClientModule("plano")} /> : <GrahamValuationSection assets={assets} selectedAsset={grahamAsset} search={grahamSearch} setSearch={setGrahamSearch} setSelectedAsset={setGrahamAsset} currentUser={currentUser} settings={grahamSettings} saveSettings={saveGrahamSettings} growth={grahamGrowth} setGrowth={setGrahamGrowth} y={grahamY} setY={setGrahamY} />)}
 
-        {clientModule === "alfatec_fiis" && <AlfatecFiiSection assets={assets} selectedAsset={fiiAsset} search={fiiSearch} setSearch={setFiiSearch} setSelectedAsset={setFiiAsset} currentUser={currentUser} settings={fiiSettings} saveSettings={saveFiiSettings} filters={fiiFilters} setFilters={setFiiFilters} segments={fiiSegments} opportunities={fiiOpportunityAnalyses} />}
+        {clientModule === "alfatec_fiis" && (isFreeUser ? <FreeMethodExplanation method="Método AlfaTec FIIs" description="O método combina qualidade, renda, risco, valuation, gestão, liquidez e diversificação conforme o tipo de fundo. Scores e cálculos completos estão disponíveis nos planos pagos." onUpgrade={() => setClientModule("plano")} /> : <AlfatecFiiSection assets={assets} selectedAsset={fiiAsset} search={fiiSearch} setSearch={setFiiSearch} setSelectedAsset={setFiiAsset} currentUser={currentUser} settings={fiiSettings} saveSettings={saveFiiSettings} filters={fiiFilters} setFilters={setFiiFilters} segments={fiiSegments} opportunities={fiiOpportunityAnalyses} />)}
 
         {clientModule === "alfatec_portfolio_method" && <AlfatecPortfolioMethod lines={portfolioAnalysis.lines} userId={currentUser.id} />}
-        {clientModule === "alfatec_crypto_method" && <AlfatecCryptoSection assets={assets} analyses={cryptoAnalyses} selectedTicker={cryptoTicker} loading={cryptoLoading} error={cryptoError} currentUserRole={currentUser.role} settings={cryptoSettings} onSelect={(ticker) => { setCryptoTicker(ticker); void loadCryptoData([ticker]); }} onRefresh={(ticker) => void loadCryptoData([ticker])} onSaveSettings={saveCryptoSettings} />}
+        {clientModule === "alfatec_crypto_method" && (isFreeUser ? <FreeMethodExplanation method="Método AlfaTec Cripto" description="O método avalia fundamentos, rede, tokenomics, segurança, mercado, desenvolvimento, valuation on-chain e risco. Scores e análises completas estão disponíveis nos planos pagos." onUpgrade={() => setClientModule("plano")} /> : <AlfatecCryptoSection assets={assets} analyses={cryptoAnalyses} selectedTicker={cryptoTicker} loading={cryptoLoading} error={cryptoError} currentUserRole={currentUser.role} settings={cryptoSettings} onSelect={(ticker) => { setCryptoTicker(ticker); void loadCryptoData([ticker]); }} onRefresh={(ticker) => void loadCryptoData([ticker])} onSaveSettings={saveCryptoSettings} />)}
 
         {clientModule === "notificacoes" && <NotificationCenter />}
 
-        {clientModule === "plano" && <ClientPlanSection user={currentUser} plans={plans} payments={payments} />}
+        {clientModule === "plano" && <ClientPlanSection user={currentUser} plans={plans} payments={payments} upgradeResource={upgradeResource} />}
 
         {clientModule === "radar" && (
           <Section title="Radar IA" subtitle="Ranking de oportunidades com score transparente e configurável." eyebrow="Inteligência automatizada">
@@ -1538,7 +1541,7 @@ export default function AlfatecInvestPro() {
 
         {clientModule === "relatorios" && (
           <Section title="Relatórios" subtitle="Documentos profissionais da carteira com prévia e exportação multiformato." eyebrow="PDF, Excel, CSV, JSON e PNG">
-            <ReportCenter mode="client" user={currentUser} plans={plans} payments={payments} portfolio={portfolioAnalysis} assets={assets} fiiAnalyses={fiiAnalyses} cryptoAnalyses={cryptoAnalyses} />
+            <ReportCenter mode="client" freeMode={isFreeUser} user={currentUser} plans={plans} payments={payments} portfolio={portfolioAnalysis} assets={assets} fiiAnalyses={fiiAnalyses} cryptoAnalyses={cryptoAnalyses} />
           </Section>
         )}
 
@@ -1548,7 +1551,7 @@ export default function AlfatecInvestPro() {
   );
 }
 
-function Shell({ darkMode, setDarkMode, logout, user, modules, activeId, onMenu, children }: { darkMode: boolean; setDarkMode: (value: boolean) => void; logout: () => void; user: Account; modules: Array<{ id: string; label: string; icon: React.ComponentType<{ className?: string }>; group?: string }>; activeId: string; onMenu: (id: string) => void; children: React.ReactNode }) {
+function Shell({ darkMode, setDarkMode, logout, user, modules, activeId, onMenu, children }: { darkMode: boolean; setDarkMode: (value: boolean) => void; logout: () => void; user: Account; modules: Array<{ id: string; label: string; icon: React.ComponentType<{ className?: string }>; group?: string; locked?: boolean }>; activeId: string; onMenu: (id: string) => void; children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const adminGroups = ["Área do cliente", "Administração"];
   const activeModule = modules.find((item) => item.id === activeId);
@@ -1556,11 +1559,13 @@ function Shell({ darkMode, setDarkMode, logout, user, modules, activeId, onMenu,
     ? adminGroups.map((group) => ({ group, items: modules.filter((item) => item.group === group) })).filter((item) => item.items.length)
     : [{ group: "Menu principal", items: modules }];
 
-  const renderMenuButton = (item: { id: string; label: string; icon: React.ComponentType<{ className?: string }> }) => {
+  const renderMenuButton = (item: { id: string; label: string; icon: React.ComponentType<{ className?: string }>; locked?: boolean }) => {
     const Icon = item.icon;
     return (
       <button
         key={item.id}
+        aria-label={item.locked ? `${item.label}, recurso bloqueado no plano atual` : item.label}
+        title={item.locked ? `${item.label} disponível nos planos pagos` : undefined}
         onClick={() => {
           onMenu(item.id);
           setSidebarOpen(false);
@@ -1579,6 +1584,7 @@ function Shell({ darkMode, setDarkMode, logout, user, modules, activeId, onMenu,
           <Icon className="h-4 w-4" />
         </span>
         <span className="min-w-0 flex-1 truncate">{item.label}</span>
+        {item.locked && <Lock className="h-4 w-4 shrink-0 text-amber-500" aria-hidden="true" />}
         {activeId === item.id && <ChevronRight className="h-4 w-4 shrink-0" />}
       </button>
     );
@@ -1668,7 +1674,7 @@ function Shell({ darkMode, setDarkMode, logout, user, modules, activeId, onMenu,
 
 function LoginScreen({ darkMode, setDarkMode, loginUser, setLoginUser, loginPassword, setLoginPassword, showPassword, setShowPassword, loginError, registerMessage, databaseError, plans, stateLoaded, onSubmit, onRegister }: { darkMode: boolean; setDarkMode: (value: boolean) => void; loginUser: string; setLoginUser: (value: string) => void; loginPassword: string; setLoginPassword: (value: string) => void; showPassword: boolean; setShowPassword: (value: boolean) => void; loginError: string; registerMessage: string; databaseError: string; plans: Plan[]; stateLoaded: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onRegister: (payload: PublicRegistrationPayload) => Promise<PublicRegistrationResult> }) {
   const [mode, setMode] = useState<"login" | "register">("login");
-  const activePlans = plans.filter((plan) => plan.status === "ativo");
+  const activePlans = plans.filter((plan) => plan.status === "ativo" && !isFreePlan(plan.id, plan.name) && plan.value > 0);
 
   return (
     <div className="relative grid min-h-screen overflow-y-auto bg-slate-100 px-4 py-6 text-slate-950 dark:bg-[#020817] dark:text-slate-100 sm:px-6">
@@ -1745,6 +1751,21 @@ function Section({ title, subtitle, eyebrow, children }: { title: string; subtit
 function PremiumCard({ title, description, icon: Icon, children }: { title: string; description: string; icon: React.ComponentType<{ className?: string }>; children: React.ReactNode }) {
   return <div className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-premium dark:border-white/10 dark:bg-slate-900/80"><div className="mb-5 flex items-start gap-3"><div className="grid h-11 w-11 place-items-center rounded-2xl bg-cyan-500/10 text-cyan-500"><Icon className="h-5 w-5" /></div><div><h3 className="text-lg font-black">{title}</h3><p className="text-sm text-slate-500 dark:text-slate-400">{description}</p></div></div>{children}</div>;
 }
+function FreeAccessSummary({ text }: { text: string }) {
+  return <div className="rounded-lg border border-cyan-300 bg-cyan-500/10 p-4 text-sm font-semibold text-cyan-900 dark:border-cyan-400/30 dark:text-cyan-100">{text}</div>;
+}
+
+function FreeOpportunityList({ assets, onSelect }: { assets: Asset[]; onSelect: (asset: Asset) => void }) {
+  return <div className="space-y-2">{assets.map((asset, index) => <button key={asset.ticker} type="button" onClick={() => onSelect(asset)} className="grid w-full min-w-0 grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-left dark:border-white/10 dark:bg-white/5"><span className="grid h-9 w-9 place-items-center rounded-md bg-slate-950 text-sm font-black text-white dark:bg-white dark:text-slate-950">{index + 1}</span><span className="min-w-0"><strong className="block">{asset.ticker}</strong><span className="block truncate text-xs text-slate-500 dark:text-slate-300">{asset.name}</span></span><span className="text-right"><strong className="block">{money.format(asset.price)}</strong><span className={cls("text-xs font-bold", asset.changeDay > 0 ? "text-emerald-600 dark:text-emerald-300" : asset.changeDay < 0 ? "text-red-600 dark:text-red-300" : "text-slate-500")}>{signedPct(asset.changeDay)}</span></span></button>)}{!assets.length && <p className="p-4 text-sm text-slate-500 dark:text-slate-300">Nenhuma oportunidade disponível com os dados atuais.</p>}<p className="rounded-lg bg-slate-100 p-3 text-center text-sm font-bold text-slate-700 dark:bg-white/5 dark:text-slate-200">Veja todas as oportunidades no Plano Premium.</p></div>;
+}
+
+function UpgradeNotice({ title, description, onUpgrade }: { title: string; description: string; onUpgrade: () => void }) {
+  return <div className="mt-6 rounded-lg border border-amber-300 bg-amber-500/10 p-5 dark:border-amber-400/30"><div className="flex items-start gap-3"><Lock className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-300" /><div><h3 className="font-black text-slate-950 dark:text-white">{title}</h3><p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{description}</p></div></div><button type="button" onClick={onUpgrade} className="mt-4 rounded-md bg-cyan-600 px-4 py-2.5 text-sm font-black text-white">Conhecer Planos</button></div>;
+}
+
+function FreeMethodExplanation({ method, description, onUpgrade }: { method: string; description: string; onUpgrade: () => void }) {
+  return <Section title={method} subtitle="Explicação educacional disponível no Plano FREE." eyebrow="Métodos de análise"><div className="rounded-lg border border-slate-200 bg-white p-6 dark:border-white/10 dark:bg-[#0f172a]"><h3 className="text-xl font-black">Entenda o método</h3><p className="mt-3 max-w-3xl leading-7 text-slate-600 dark:text-slate-300">{description}</p><p className="mt-4 rounded-md bg-amber-500/10 p-3 text-sm font-semibold text-amber-800 dark:text-amber-200">Os métodos são referências analíticas e não constituem recomendação de investimento.</p><UpgradeNotice title="Cálculos completos" description="Valor intrínseco, scores, preço justo, margem de segurança e cenários completos fazem parte dos planos pagos." onUpgrade={onUpgrade} /></div></Section>;
+}
 function MetricCard({ label, value, icon: Icon, tone }: { label: string; value: string; icon: React.ComponentType<{ className?: string }>; tone: string }) {
   const tones: Record<string, string> = { teal: "from-teal-400 to-cyan-500", green: "from-emerald-400 to-green-600", red: "from-red-400 to-rose-600", blue: "from-sky-400 to-blue-600", purple: "from-violet-400 to-purple-600", amber: "from-amber-400 to-orange-500", slate: "from-slate-500 to-slate-800" };
   return <div className="rounded-[1.7rem] border border-slate-200 bg-white p-5 shadow-premium dark:border-white/10 dark:bg-slate-900/80"><div className={cls("mb-4 grid h-11 w-11 place-items-center rounded-2xl bg-gradient-to-br text-white", tones[tone])}><Icon className="h-5 w-5" /></div><p className="text-sm text-slate-500 dark:text-slate-400">{label}</p><p className="mt-1 text-2xl font-black tracking-tight">{value}</p></div>;
@@ -1769,7 +1790,7 @@ function AssetCard({ asset, favorites, onSelect, onFavorite }: { asset: Asset; f
   );
 }
 
-function AssetPanel({ asset, favorites, setFavorites, onAddToPortfolio, onOpenFiiAnalysis, cryptoAnalysis, onOpenCryptoAnalysis }: { asset: Asset; favorites: string[]; setFavorites: React.Dispatch<React.SetStateAction<string[]>>; onAddToPortfolio: (asset: Asset) => void; onOpenFiiAnalysis?: (asset: Asset) => void; cryptoAnalysis?: AlfatecCryptoAnalysis | null; onOpenCryptoAnalysis?: (asset: Asset) => void }) {
+function AssetPanel({ asset, favorites, setFavorites, onAddToPortfolio, onOpenFiiAnalysis, cryptoAnalysis, onOpenCryptoAnalysis, basicMode = false }: { asset: Asset; favorites: string[]; setFavorites: React.Dispatch<React.SetStateAction<string[]>>; onAddToPortfolio: (asset: Asset) => void; onOpenFiiAnalysis?: (asset: Asset) => void; cryptoAnalysis?: AlfatecCryptoAnalysis | null; onOpenCryptoAnalysis?: (asset: Asset) => void; basicMode?: boolean }) {
   const isFavorite = favorites.includes(asset.ticker);
   const source = externalDataSourceLabel(asset.sourceLabel, asset.source);
   return (
@@ -1788,6 +1809,12 @@ function AssetPanel({ asset, favorites, setFavorites, onAddToPortfolio, onOpenFi
         </div>
         <AssetMetricsGrid dark price={asset.price} changeDay={asset.changeDay} score={asset.score} assetType={asset.type} />
       </div>
+      {basicMode ? (
+        <div className="mt-4 rounded-lg border border-cyan-300 bg-cyan-500/10 p-4 text-sm text-cyan-900 dark:border-cyan-400/30 dark:text-cyan-100">
+          <strong>Visão básica do Plano FREE.</strong> Cotação, variação diária, gráfico e informações essenciais permanecem disponíveis. Indicadores avançados e análises completas fazem parte dos planos pagos.
+        </div>
+      ) : (
+        <>
       <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
         <InfoTile label="Mercado" value={asset.market} /><InfoTile label="Setor" value={asset.sector} />
         <InfoTile label="Liquidez" value={compactMoney.format(asset.liquidity)} /><InfoTile label="Risco" value={asset.risk} />
@@ -1801,6 +1828,8 @@ function AssetPanel({ asset, favorites, setFavorites, onAddToPortfolio, onOpenFi
       </div>
       {asset.type === "FII" && <FiiAssetMiniSummary asset={asset} onOpen={() => onOpenFiiAnalysis?.(asset)} />}
       {asset.type === "CRIPTO" && <CryptoMiniSummary analysis={cryptoAnalysis ?? null} onOpen={() => onOpenCryptoAnalysis?.(asset)} />}
+        </>
+      )}
       <div className="mt-4 rounded-2xl bg-slate-50 p-3 text-xs text-slate-600 dark:bg-white/5 dark:text-slate-300">
         <strong>Consulta externa:</strong> Yahoo Finance. O destino de consulta pode ser diferente da fonte usada pela plataforma.
       </div>
@@ -1951,15 +1980,33 @@ function FiiRadarTable({ items, onSelect }: { items: Array<{ asset: Asset; analy
   return <div className="space-y-3">{items.map(({ asset, analysis }, index) => <button key={asset.ticker} onClick={() => onSelect(asset)} className="flex w-full items-center gap-4 rounded-3xl border border-slate-200 bg-white p-4 text-left transition hover:scale-[1.01] dark:border-white/10 dark:bg-white/5"><span className="grid h-10 w-10 place-items-center rounded-2xl bg-slate-950 font-black text-white dark:bg-white dark:text-slate-950">{index + 1}</span><span className="min-w-0 flex-1"><strong>{asset.ticker}</strong><span className="ml-2 text-sm text-slate-500 dark:text-slate-300">{asset.name}</span><p className="mt-1 text-xs text-slate-400">{analysis.kindLabel} · {asset.segment}</p><p className="mt-2 text-xs font-semibold text-cyan-700 dark:text-cyan-300">Score AlfaTec FIIs: {analysis.score === null ? "dados insuficientes" : `${analysis.score}/100`} · Renda {analysis.scores.renda === null ? "indisponível" : Math.round(analysis.scores.renda)} · Valuation {analysis.scores.valuation === null ? "indisponível" : Math.round(analysis.scores.valuation)}</p><p className="mt-1 text-xs text-slate-500 dark:text-slate-300">Confiança: {analysis.confidence === "Media" ? "Média" : analysis.confidence}. O método entra como componente identificado do Radar IA para FIIs.</p></span><span className="rounded-full bg-cyan-500/10 px-3 py-1 font-black text-cyan-600 dark:text-cyan-300">{analysis.score ?? "--"}</span></button>)}{items.length === 0 && <p className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-500 dark:bg-white/5 dark:text-slate-400">Nenhum FII atende aos filtros do Radar IA.</p>}</div>;
 }
 
-function ClientPlanSection({ user, plans, payments }: { user: Account; plans: Plan[]; payments: Payment[] }) {
+function ClientPlanSection({ user, plans, payments, upgradeResource = null }: { user: Account; plans: Plan[]; payments: Payment[]; upgradeResource?: "comparador" | "radar" | null }) {
   const plan = plans.find((item) => item.id === user.planId);
+  const free = isFreePlan(user.planId, plan?.name);
   const lastPayment = [...payments].filter((payment) => payment.clientId === user.id).sort((a, b) => b.paymentDate.localeCompare(a.paymentDate))[0];
   const days = calcularDiasRestantes(user.dueDate ?? todayIso());
   const status = planVisualStatus(user);
   const alert = planAlertText(user);
-  return <Section title="Plano" subtitle="Assinatura, vencimento, dias restantes e recursos liberados." eyebrow="Meu acesso"><div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]"><PremiumCard title="Plano atual" description="Valor contratado e validade do acesso." icon={WalletCards}><div className="grid gap-3 sm:grid-cols-2"><InfoTile label="Plano" value={plan?.name ?? "Sem plano"} /><InfoTile label="Valor" value={money.format(user.planValue ?? plan?.value ?? 0)} /><InfoTile label="Inicio" value={user.planStartedAt ? new Date(user.planStartedAt).toLocaleDateString("pt-BR") : "-"} /><InfoTile label="Vencimento" value={user.dueDate ? new Date(user.dueDate).toLocaleDateString("pt-BR") : "-"} /><InfoTile label="Duracao" value={`${plan?.durationDays ?? 0} dias`} /><InfoTile label="Dias restantes" value={`${days} dias`} /><InfoTile label="Status" value={status.label} /><InfoTile label="Ultimo pagamento" value={lastPayment ? money.format(lastPayment.value) : "-"} /></div>{alert && <p className="mt-4 rounded-2xl bg-amber-500/10 p-3 text-sm font-bold text-amber-700 dark:text-amber-300">{alert}</p>}<p className="mt-4 rounded-2xl bg-slate-50 p-3 text-sm text-slate-600 dark:bg-white/5 dark:text-slate-300">{status.detail}</p><a href="mailto:admin@alfatec.local" className="mt-4 inline-flex rounded-2xl bg-cyan-500 px-5 py-3 font-bold text-white">Entrar em contato com o administrador</a></PremiumCard><PremiumCard title="Menus liberados" description="Recursos disponiveis conforme plano e permissoes do cliente." icon={ShieldCheck}><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{clientModules.map((module) => <div key={module.id} className={cls("rounded-2xl p-3 text-sm font-bold", user.permissions.includes(module.id) ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "bg-slate-100 text-slate-500 dark:bg-white/5 dark:text-slate-400")}>{user.permissions.includes(module.id) ? "Liberado" : "Bloqueado"} - {module.label}</div>)}</div></PremiumCard></div><div className="mt-6"><h3 className="mb-4 text-xl font-black">Assinar ou renovar plano</h3><MercadoPagoLinkCheckout plans={plans} currentPlanId={user.planId} userName={user.name} userEmail={user.email} /></div></Section>;
-}
+  const paidPlans = plans.filter((item) => item.status === "ativo" && !isFreePlan(item.id, item.name) && item.value > 0);
+  const lockedName = upgradeResource === "comparador" ? "Comparador Inteligente" : "Radar IA";
+  const lockedDescription = upgradeResource === "comparador"
+    ? "Compare ativos, indicadores, rentabilidade, risco e desempenho histórico nos planos pagos."
+    : "Acesse análises inteligentes, filtros avançados e identificação automatizada de oportunidades nos planos pagos.";
 
+  return <Section title="Plano" subtitle="Assinatura, vencimento, dias restantes e recursos liberados." eyebrow="Meu acesso">
+    {upgradeResource && <UpgradeNotice title={`${lockedName} disponível nos planos pagos`} description={lockedDescription} onUpgrade={() => document.getElementById("upgrade-planos")?.scrollIntoView({ behavior: "smooth", block: "start" })} />}
+    <div className="mt-6 grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
+      <PremiumCard title="Plano atual" description="Valor contratado e validade do acesso." icon={WalletCards}>
+        <div className="grid gap-3 sm:grid-cols-2"><InfoTile label="Plano" value={plan?.name ?? "Sem plano"} /><InfoTile label="Valor" value={money.format(user.planValue ?? plan?.value ?? 0)} /><InfoTile label="Início" value={user.planStartedAt ? new Date(user.planStartedAt).toLocaleDateString("pt-BR") : "-"} /><InfoTile label="Vencimento" value={user.dueDate ? new Date(user.dueDate).toLocaleDateString("pt-BR") : "-"} /><InfoTile label="Duração" value={free ? "Sem cobrança" : `${plan?.durationDays ?? 0} dias`} /><InfoTile label="Dias restantes" value={free ? "Acesso gratuito" : `${days} dias`} /><InfoTile label="Status" value={status.label} /><InfoTile label="Último pagamento" value={lastPayment ? money.format(lastPayment.value) : "-"} /></div>
+        {alert && !free && <p className="mt-4 rounded-lg bg-amber-500/10 p-3 text-sm font-bold text-amber-700 dark:text-amber-300">{alert}</p>}
+        <p className="mt-4 rounded-lg bg-slate-50 p-3 text-sm text-slate-600 dark:bg-white/5 dark:text-slate-300">{free ? "O Plano FREE mantém os recursos básicos e permite upgrade a qualquer momento." : status.detail}</p>
+        <a href="mailto:alfatecinvestpro@gmail.com" className="mt-4 inline-flex rounded-md bg-cyan-600 px-5 py-3 font-bold text-white">Entrar em contato com o administrador</a>
+      </PremiumCard>
+      {free ? <PremiumCard title="Benefícios do Plano FREE" description="Recursos básicos disponíveis na conta." icon={ShieldCheck}><div className="grid gap-2 sm:grid-cols-2">{["Consulta básica ao mercado", `Até ${FREE_PORTFOLIO_LIMIT} ativos na carteira`, "Top 10 oportunidades", "Relatório resumido em PDF", "3 notificações por dia"].map((item) => <p key={item} className="rounded-md bg-emerald-500/10 p-3 text-sm font-bold text-emerald-700 dark:text-emerald-300">Liberado - {item}</p>)}{["Comparador Inteligente", "Radar IA", "Balanceamento inteligente", "Métodos completos", "Relatórios avançados"].map((item) => <p key={item} className="rounded-md bg-slate-100 p-3 text-sm font-bold text-slate-600 dark:bg-white/5 dark:text-slate-300">Bloqueado - {item}</p>)}</div></PremiumCard> : <PremiumCard title="Menus liberados" description="Recursos disponíveis conforme plano e permissões do cliente." icon={ShieldCheck}><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{clientModules.map((module) => <div key={module.id} className={cls("rounded-md p-3 text-sm font-bold", user.permissions.includes(module.id) ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "bg-slate-100 text-slate-500 dark:bg-white/5 dark:text-slate-400")}>{user.permissions.includes(module.id) ? "Liberado" : "Bloqueado"} - {module.label}</div>)}</div></PremiumCard>}
+    </div>
+    <div id="upgrade-planos" className="mt-6 scroll-mt-24"><h3 className="mb-4 text-xl font-black">{free ? "Fazer upgrade" : "Assinar ou renovar plano"}</h3><MercadoPagoLinkCheckout plans={paidPlans} currentPlanId={free ? undefined : user.planId} userName={user.name} userEmail={user.email} /></div>
+  </Section>;
+}
 function PlanPriceEditor({ plan, onUpdatePlan }: { plan: Plan; onUpdatePlan: (planId: string, patch: Partial<Plan>, notes?: string) => void }) {
   const [value, setValue] = useState(plan.value);
   const [durationDays, setDurationDays] = useState(plan.durationDays);
@@ -1972,7 +2019,7 @@ function PlanPriceEditor({ plan, onUpdatePlan }: { plan: Plan; onUpdatePlan: (pl
 function PlanValuesManager({ plans, history, clients, payments, onUpdatePlan }: { plans: Plan[]; history: PlanPriceHistory[]; clients: Account[]; payments: Payment[]; onUpdatePlan: (planId: string, patch: Partial<Plan>, notes?: string) => void }) {
   const monthlyForecast = clients.filter((client) => client.status === "ativo").reduce((sum, client) => sum + (client.planValue ?? plans.find((plan) => plan.id === client.planId)?.value ?? 0), 0);
   const expiringSeven = clients.filter((client) => calcularDiasRestantes(client.dueDate ?? todayIso()) <= 7 && !isExpired(client.dueDate)).length;
-  return <PremiumCard title="Valores dos Planos" description="Fonte única de verdade para novos cadastros, renovações e cobranças." icon={CircleDollarSign}><div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3"><InfoTile label="Valor semanal" value={money.format(plans.find((plan) => plan.id === "semanal")?.value ?? 0)} /><InfoTile label="Valor mensal" value={money.format(plans.find((plan) => plan.id === "mensal")?.value ?? 0)} /><InfoTile label="Valor anual" value={money.format(plans.find((plan) => plan.id === "anual")?.value ?? 0)} /><InfoTile label="Receita mensal prevista" value={money.format(monthlyForecast)} /><InfoTile label="Receita anual prevista" value={money.format(monthlyForecast * 12)} /><InfoTile label="Planos vencendo em 7 dias" value={String(expiringSeven)} /></div><div className="grid gap-4 xl:grid-cols-3">{plans.map((plan) => <PlanPriceEditor key={plan.id} plan={plan} onUpdatePlan={onUpdatePlan} />)}</div><div className="mt-5 rounded-3xl border border-slate-200 p-4 dark:border-white/10"><h4 className="font-black">Histórico de alteração de preço</h4><div className="mt-3 space-y-2">{history.slice(0, 8).map((item) => <div key={item.id} className="grid gap-2 rounded-2xl bg-slate-50 p-3 text-sm dark:bg-white/5 sm:grid-cols-5"><strong>{item.planName}</strong><span>{money.format(item.previousPrice)}</span><span>{money.format(item.newPrice)}</span><span>{item.changedByName}</span><span>{new Date(item.createdAt).toLocaleString("pt-BR")}</span></div>)}{history.length === 0 && <p className="text-sm text-slate-500 dark:text-slate-400">Nenhuma alteração de preço registrada.</p>}</div></div><p className="mt-4 text-xs text-slate-500 dark:text-slate-400">Pagamentos antigos permanecem com o valor registrado na época. Novas cobranças usam o valor vigente do plano.</p></PremiumCard>;
+  return <PremiumCard title="Valores dos Planos" description="Fonte única de verdade para novos cadastros, renovações e cobranças." icon={CircleDollarSign}><div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3"><InfoTile label="Valor semanal" value={money.format(plans.find((plan) => plan.id === "semanal")?.value ?? 0)} /><InfoTile label="Valor mensal" value={money.format(plans.find((plan) => plan.id === "mensal")?.value ?? 0)} /><InfoTile label="Valor anual" value={money.format(plans.find((plan) => plan.id === "anual")?.value ?? 0)} /><InfoTile label="Receita mensal prevista" value={money.format(monthlyForecast)} /><InfoTile label="Receita anual prevista" value={money.format(monthlyForecast * 12)} /><InfoTile label="Planos vencendo em 7 dias" value={String(expiringSeven)} /></div><div className="grid gap-4 xl:grid-cols-3">{plans.filter((plan) => !isFreePlan(plan.id, plan.name)).map((plan) => <PlanPriceEditor key={plan.id} plan={plan} onUpdatePlan={onUpdatePlan} />)}</div><div className="mt-5 rounded-3xl border border-slate-200 p-4 dark:border-white/10"><h4 className="font-black">Histórico de alteração de preço</h4><div className="mt-3 space-y-2">{history.slice(0, 8).map((item) => <div key={item.id} className="grid gap-2 rounded-2xl bg-slate-50 p-3 text-sm dark:bg-white/5 sm:grid-cols-5"><strong>{item.planName}</strong><span>{money.format(item.previousPrice)}</span><span>{money.format(item.newPrice)}</span><span>{item.changedByName}</span><span>{new Date(item.createdAt).toLocaleString("pt-BR")}</span></div>)}{history.length === 0 && <p className="text-sm text-slate-500 dark:text-slate-400">Nenhuma alteração de preço registrada.</p>}</div></div><p className="mt-4 text-xs text-slate-500 dark:text-slate-400">Pagamentos antigos permanecem com o valor registrado na época. Novas cobranças usam o valor vigente do plano.</p></PremiumCard>;
 }
 
 function PasswordRequirementList({ value }: { value: string }) {

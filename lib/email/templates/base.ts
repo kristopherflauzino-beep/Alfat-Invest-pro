@@ -19,6 +19,9 @@ export function officialAppUrl() {
   }
 }
 
+export function officialEmailLogoUrl() {
+  return `${officialAppUrl()}/logo-alfatec-email.png`;
+}
 export function emailLayout(input: {
   preheader: string;
   title: string;
@@ -47,11 +50,11 @@ export function emailLayout(input: {
     ? '<p style="margin:24px 0;text-align:center"><a href="' + escapeHtml(input.actionUrl) + '" style="display:inline-block;padding:13px 22px;border-radius:10px;background:#0891b2;color:#ffffff;text-decoration:none;font-weight:800">' + escapeHtml(input.actionLabel) + "</a></p>"
     : "";
   return [
-    "<!doctype html><html><body style=\"margin:0;background:#f1f5f9;font-family:Arial,sans-serif\">",
+    "<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta name=\"x-apple-disable-message-reformatting\"><title>AlfaTec Invest Pro</title></head><body style=\"margin:0;background:#f1f5f9;font-family:Arial,sans-serif\">",
     '<div style="display:none;max-height:0;overflow:hidden">' + escapeHtml(input.preheader) + "</div>",
     '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f1f5f9;padding:24px 12px"><tr><td align="center">',
     '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:620px;background:#ffffff;border-radius:14px;overflow:hidden;border:1px solid #e2e8f0">',
-    '<tr><td style="padding:24px;background:#020817;text-align:center"><img src="' + escapeHtml(logoUrl) + '" alt="AlfaTec Invest Pro" width="150" style="display:block;margin:0 auto;max-width:150px;height:auto;border:0"></td></tr>',
+    '<tr><td style="padding:24px;background:#ffffff;text-align:center"><img src="' + escapeHtml(logoUrl) + '" alt="AlfaTec Invest Pro" width="180" style="display:block;margin:0 auto;max-width:180px;width:100%;height:auto;border:0"><p style="margin:12px 0 0;color:#020817;font-size:16px;font-weight:800;letter-spacing:0">ALFATEC INVEST PRO</p></td></tr>',
     '<tr><td style="padding:30px"><h1 style="margin:0 0 20px;color:#0f172a;font-size:24px;line-height:1.25">' + escapeHtml(input.title) + "</h1>",
     '<p style="margin:0 0 16px;color:#0f172a;font-size:16px;font-weight:700">' + escapeHtml(input.greeting) + "</p>",
     paragraphs,

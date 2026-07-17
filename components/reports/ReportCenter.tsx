@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { CalendarDays, Download, FileSpreadsheet, LoaderCircle, ShieldCheck, UserRound } from "lucide-react";
 import type { AlfatecCryptoAnalysis } from "@/lib/analysis/alfatec-crypto";
+import { FREE_REPORT_FORMATS, FREE_REPORT_SECTIONS } from "@/lib/plans/access";
 import type { AlfatecFiiAnalysis } from "@/lib/analysis/alfatec-fii";
 import { adminReportSections, clientReportSections } from "@/lib/reports/catalog";
 import {
@@ -37,6 +38,7 @@ type IndividualContext = {
 
 type Props = {
   mode: "client" | "admin";
+  freeMode?: boolean;
   user: ReportUser;
   accounts?: ReportUser[];
   plans?: ReportPlan[];
@@ -61,7 +63,7 @@ function quickPeriod(kind: string) {
   return { start: iso(start), end: iso(end), label: label(iso(start), iso(end)) };
 }
 
-export function ReportCenter({ mode, user, accounts = [], plans = [], payments = [], auditLogs = [], portfolio, assets, fiiAnalyses, cryptoAnalyses }: Props) {
+export function ReportCenter({ mode, freeMode = false, user, accounts = [], plans = [], payments = [], auditLogs = [], portfolio, assets, fiiAnalyses, cryptoAnalyses }: Props) {
   const [period, setPeriod] = useState(() => quickPeriod("year"));
   const [clientId, setClientId] = useState("");
   const [planId, setPlanId] = useState("");
@@ -103,7 +105,11 @@ export function ReportCenter({ mode, user, accounts = [], plans = [], payments =
     }
     return buildAdminReport({ user, accounts, plans, payments, auditLogs, subscriptionRequests: adminContext.subscriptionRequests, emailJobs: adminContext.emailJobs, notifications: adminContext.notifications, reportExports: adminContext.reportExports, filters: { period, clientId: clientId || undefined, planId: planId || undefined, status: statusFilter || undefined } });
   }, [mode, user, portfolio, assets, fiiAnalyses, cryptoAnalyses, period, scope, individual, accounts, plans, payments, auditLogs, adminContext, clientId, planId, statusFilter]);
-  const catalog = mode === "admin" && scope === "admin" ? adminReportSections : clientReportSections;
+  const catalog = useMemo(() => mode === "admin" && scope === "admin"
+    ? adminReportSections
+    : freeMode
+      ? clientReportSections.filter((section) => (FREE_REPORT_SECTIONS as readonly string[]).includes(section.id))
+      : clientReportSections, [mode, scope, freeMode]);
   const canExport = mode === "client" || scope === "admin" || Boolean(individual);
 
   return (
@@ -132,6 +138,7 @@ export function ReportCenter({ mode, user, accounts = [], plans = [], payments =
         </div>
       </div>
 
+      {freeMode && <div className="rounded-lg border border-cyan-300 bg-cyan-500/10 p-4 text-sm font-semibold text-cyan-900 dark:border-cyan-400/30 dark:text-cyan-100">O Plano FREE permite relatório resumido somente em PDF. Formatos e seções avançadas ficam disponíveis após o upgrade.</div>}
       {contextError && <p className="rounded-md border border-red-300 bg-red-500/10 p-4 text-sm font-semibold text-red-600 dark:text-red-300">{contextError}</p>}
       <div className="rounded-lg border border-slate-200 bg-white p-5 dark:border-white/10 dark:bg-[#0f172a]">
         <div className="flex flex-wrap items-start justify-between gap-4"><div className="flex items-center gap-3"><FileSpreadsheet className="h-6 w-6 text-teal-600 dark:text-cyan-300" /><div><p className="text-xs font-black uppercase text-teal-600 dark:text-cyan-300">Documento independente</p><h3 className="text-xl font-black text-slate-950 dark:text-white">{report.title}</h3><p className="text-sm text-slate-500 dark:text-slate-300">{report.user.name} · {report.period.label}</p></div></div><button type="button" onClick={() => setModalOpen(true)} disabled={!canExport} className="inline-flex items-center gap-2 rounded-md bg-teal-600 px-5 py-3 font-black text-white disabled:opacity-50"><Download className="h-5 w-5" />Exportar relatório</button></div>
@@ -139,7 +146,7 @@ export function ReportCenter({ mode, user, accounts = [], plans = [], payments =
         <div className="mt-5 grid gap-3 text-xs text-slate-500 dark:text-slate-300 sm:grid-cols-3"><p><strong className="text-slate-800 dark:text-white">Dados atualizados:</strong><br />{new Date(report.dataUpdatedAt).toLocaleString("pt-BR")}</p><p><strong className="text-slate-800 dark:text-white">Fontes:</strong><br />{report.sources.join(" · ") || "Dado indisponível"}</p><p><strong className="text-slate-800 dark:text-white">Seções disponíveis:</strong><br />{catalog.length}</p></div>
       </div>
 
-      <ReportExportModal open={modalOpen} onClose={() => setModalOpen(false)} report={report} catalog={catalog} />
+      <ReportExportModal open={modalOpen} onClose={() => setModalOpen(false)} report={report} catalog={catalog} allowedFormats={freeMode ? FREE_REPORT_FORMATS : undefined} fixedSections={freeMode} />
     </div>
   );
 }
