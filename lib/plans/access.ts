@@ -50,7 +50,8 @@ export const freePlanLockedFeatures = [
 ] as const;
 
 
-export const freeLockedModules = ["comparador", "radar"] as const;
+export const freeLockedModules = ["comparador", "radar", "alfatec_portfolio_method"] as const;
+export const freeExplainerModules = ["alfatec_portfolio_method"] as const;
 
 export function isFreePlan(planId?: string | null, planName?: string | null) {
   const id = planId?.trim().toLowerCase();
@@ -88,6 +89,10 @@ export function getFreePlanBenefits(plan?: { limits?: Partial<FreePlanLimits> } 
 }
 export function isFreeLockedModule(moduleId: string) {
   return (freeLockedModules as readonly string[]).includes(moduleId);
+}
+
+export function isFreeExplainerModule(moduleId: string) {
+  return (freeExplainerModules as readonly string[]).includes(moduleId);
 }
 
 export function isFreeReportExportAllowed(format: string, sections: readonly string[]) {

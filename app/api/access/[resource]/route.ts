@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 export async function GET(request: Request, { params }: { params: Promise<{ resource: string }> }) {
   try {
     const { resource } = await params;
-    if (!(["comparador", "radar"] as string[]).includes(resource)) {
+    if (!(["comparador", "radar", "alfatec_portfolio_method"] as string[]).includes(resource)) {
       return NextResponse.json({ error: "Recurso não encontrado." }, { status: 404 });
     }
     await requireResourceAccess(request, resource as RestrictedResource);

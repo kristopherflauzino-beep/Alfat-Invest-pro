@@ -71,7 +71,8 @@ export async function POST(request: Request) {
         summary: "Sua senha foi redefinida e todas as sessões anteriores foram encerradas.",
         priority: "critical",
         category: "system",
-        actionUrl: "/"
+        actionUrl: "/",
+        emailManagedExternally: true
       }),
       ...(Array.isArray(state.notifications) ? state.notifications : [])
     ];

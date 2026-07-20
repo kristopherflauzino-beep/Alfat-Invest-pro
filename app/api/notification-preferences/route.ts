@@ -4,6 +4,7 @@ import { AuthError, authErrorResponse, requireAccount } from "@/lib/auth/session
 import { readCoreState, writeCoreState } from "@/lib/server/core-state";
 import { assertSameOrigin, requestErrorResponse } from "@/lib/server/request-security";
 import { mergeNotificationPreferences, notificationTopics } from "@/lib/notifications/notifications";
+import { normalizeNotificationPreferenceChannels } from "@/lib/notifications/notifications";
 
 export const runtime = "nodejs";
 const preferenceSchema = z.object({
@@ -49,6 +50,12 @@ export async function PUT(request: Request) {
       updatedAt: now
     }));
     const state = await readCoreState();
+    for (const item of requested) {
+      Object.assign(
+        item,
+        normalizeNotificationPreferenceChannels(item, essential.has(item.topic))
+      );
+    }
     const others = (Array.isArray(state.notificationPreferences) ? state.notificationPreferences : []).filter((value) => !value || typeof value !== "object" || (value as { userId?: string }).userId !== account.id);
     state.notificationPreferences = [...requested, ...others];
     await writeCoreState(state);

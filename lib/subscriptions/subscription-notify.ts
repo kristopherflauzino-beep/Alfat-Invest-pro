@@ -27,7 +27,8 @@ export function addSubscriptionNotification(
         summary: input.summary,
         priority: input.priority,
         category: input.topic === "payment_status" ? "payments" : "plan",
-        actionUrl: "/?menu=plano"
+        actionUrl: "/?menu=plano",
+        emailManagedExternally: Boolean(input.emailEvent)
       }),
       ...(Array.isArray(state.notifications) ? state.notifications : [])
     ].slice(0, 2000);

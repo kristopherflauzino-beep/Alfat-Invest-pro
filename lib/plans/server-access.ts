@@ -1,9 +1,9 @@
 import "server-only";
-import { requireAccount } from "@/lib/auth/session";
+import { AuthError, requireAccount } from "@/lib/auth/session";
 import { isFreePlan } from "@/lib/plans/access";
 import { readCoreState } from "@/lib/server/core-state";
 
-export type RestrictedResource = "comparador" | "radar";
+export type RestrictedResource = "comparador" | "radar" | "alfatec_portfolio_method";
 
 export async function requireResourceAccess(request: Request, resource: RestrictedResource) {
   const account = await requireAccount(request);
@@ -18,10 +18,6 @@ export async function requireResourceAccess(request: Request, resource: Restrict
     isFreePlan(account.planId, plan?.name) ||
     !account.permissions.includes(resource);
 
-  if (denied) {
-    const error = new Error("Seu plano atual não possui acesso a este recurso.") as Error & { status?: number };
-    error.status = 403;
-    throw error;
-  }
+  if (denied) throw new AuthError(403, "Seu plano atual não possui acesso a este recurso.");
   return account;
 }

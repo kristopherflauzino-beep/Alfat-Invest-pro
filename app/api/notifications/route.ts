@@ -7,6 +7,7 @@ import type { AppNotification } from "@/lib/notifications/notifications";
 import { ensurePlanLifecycleNotifications, dueEmailJobIds } from "@/lib/notifications/plan-lifecycle";
 import { deliverPlanEmailJob } from "@/lib/email/email-jobs";
 import { getFreePlanLimits, isFreePlan } from "@/lib/plans/access";
+import { deliverNotificationEmails } from "@/lib/notifications/email-delivery";
 
 export const runtime = "nodejs";
 const actionSchema = z.object({
@@ -41,6 +42,8 @@ export async function GET(request: Request) {
       dailyCounts.set(day, count + 1);
       return count < (dailyLimit ?? 0);
     }) : ownNotifications;
+    const emailDelivery = await deliverNotificationEmails(state, account, notifications);
+    if (emailDelivery.changed) await writeCoreState(state);
     return NextResponse.json({
       notifications,
       unreadCount: notifications.filter((item) => !item.readAt).length,

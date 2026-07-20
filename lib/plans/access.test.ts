@@ -5,6 +5,7 @@ import {
   FREE_PLAN_NAME,
   freePlanDisplayName,
   getFreePlanBenefits,
+  isFreeExplainerModule,
   getFreePlanLimits,
   isFreeLockedModule,
   isFreePlan,
@@ -33,6 +34,8 @@ describe("free plan access rules", () => {
 
     expect(isFreeLockedModule("comparador")).toBe(true);
     expect(isFreeLockedModule("radar")).toBe(true);
+    expect(isFreeLockedModule("alfatec_portfolio_method")).toBe(true);
+    expect(isFreeExplainerModule("alfatec_portfolio_method")).toBe(true);
     expect(isFreeLockedModule("mercado")).toBe(false);
   });
 

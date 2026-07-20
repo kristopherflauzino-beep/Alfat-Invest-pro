@@ -148,6 +148,7 @@ import { externalDataSourceLabel } from "@/lib/assets/external-finance-url";
 import { StockOpportunityFilters } from "@/components/opportunities/StockOpportunityFilters";
 import { defaultStockOpportunityFilters, filterAndSortStockOpportunities, type StockOpportunityFilterState } from "@/lib/opportunities/stock-filters";
 import { DEFAULT_FREE_PLAN_LIMITS, FREE_REQUIRES_PAYMENT, FREE_TECHNICAL_DURATION_DAYS, freePlanDisplayName, freePlanLockedFeatures, freePlanPermissions, getFreePlanBenefits, getFreePlanLimits, isFreeLockedModule, isFreePlan, type FreePlanLimits } from "@/lib/plans/access";
+import { isFreeExplainerModule } from "@/lib/plans/access";
 
 type Role = "ADMIN" | "CLIENTE";
 type ClientStatus = "ativo" | "pendente" | "bloqueado" | "vencido";
@@ -901,7 +902,13 @@ export default function AlfatecInvestPro() {
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("menu") as ClientModuleId | null;
     if (requested && allClientModules.includes(requested)) {
-      if (isFreeUser && isFreeLockedModule(requested)) { setUpgradeResource(requested as "comparador" | "radar"); setClientModule("plano"); return; }
+      if (isFreeUser && isFreeLockedModule(requested)) {
+        if (isFreeExplainerModule(requested)) {
+          setUpgradeResource(null); setClientModule(requested); return;
+        }
+        setUpgradeResource(requested as "comparador" | "radar");
+        setClientModule("plano"); return;
+      }
       if (currentUser?.role === "CLIENTE" && !currentUser.permissions.includes(requested)) { setUpgradeResource(null); setClientModule("plano"); return; }
       setClientModule(requested);
       if (currentUser?.role === "ADMIN") setAdminModule(requested);
@@ -1388,7 +1395,20 @@ export default function AlfatecInvestPro() {
   }
 
   return (
-    <Shell darkMode={darkMode} setDarkMode={setDarkMode} logout={logout} user={currentUser} modules={currentUser.role === "ADMIN" ? adminNavigationModules : allowedClientModules} activeId={currentUser.role === "ADMIN" ? adminModule : clientModule} onMenu={currentUser.role === "ADMIN" ? handleAdminMenu : (id) => { setGlobalSearch(""); if (isFreeUser && isFreeLockedModule(id)) { setUpgradeResource(id as "comparador" | "radar"); setClientModule("plano"); return; } setUpgradeResource(null); setClientModule(id as ClientModuleId); }}>
+    <Shell darkMode={darkMode} setDarkMode={setDarkMode} logout={logout} user={currentUser} modules={currentUser.role === "ADMIN" ? adminNavigationModules : allowedClientModules} activeId={currentUser.role === "ADMIN" ? adminModule : clientModule} onMenu={currentUser.role === "ADMIN" ? handleAdminMenu : (id) => {
+      setGlobalSearch("");
+      if (isFreeUser && isFreeLockedModule(id)) {
+        if (isFreeExplainerModule(id)) {
+          setUpgradeResource(null);
+          setClientModule(id as ClientModuleId);
+          return;
+        }
+        setUpgradeResource(id as "comparador" | "radar");
+        setClientModule("plano");
+        return;
+      }
+      setUpgradeResource(null); setClientModule(id as ClientModuleId);
+    }}>
       <div className="relative z-20">
         <GlobalSearchBox globalSearch={globalSearch} setGlobalSearch={setGlobalSearch} globalSuggestions={globalSuggestions} selectAsset={selectAsset} searchHistory={searchHistory} assets={assets} />
         {clientModule === "dashboard" && (
@@ -1539,7 +1559,7 @@ export default function AlfatecInvestPro() {
 
         {clientModule === "alfatec_fiis" && (isFreeUser ? <FreeMethodExplanation method="Método AlfaTec FIIs" description="O método combina qualidade, renda, risco, valuation, gestão, liquidez e diversificação conforme o tipo de fundo. Scores e cálculos completos estão disponíveis nos planos pagos." onUpgrade={() => setClientModule("plano")} /> : <AlfatecFiiSection assets={assets} selectedAsset={fiiAsset} search={fiiSearch} setSearch={setFiiSearch} setSelectedAsset={setFiiAsset} currentUser={currentUser} settings={fiiSettings} saveSettings={saveFiiSettings} filters={fiiFilters} setFilters={setFiiFilters} segments={fiiSegments} opportunities={fiiOpportunityAnalyses} />)}
 
-        {clientModule === "alfatec_portfolio_method" && <AlfatecPortfolioMethod lines={portfolioAnalysis.lines} userId={currentUser.id} />}
+        {clientModule === "alfatec_portfolio_method" && (isFreeUser ? <FreeMethodExplanation method="Análise e Balanceamento" description="O Método AlfaTec Carteira organiza o perfil do investidor, a alocação-alvo e os critérios de diversificação e rebalanceamento. No Plano Free, a explicação permanece disponível, mas questionário, cálculos, simulações, histórico e sugestões de balanceamento ficam bloqueados." onUpgrade={() => setClientModule("plano")} /> : <AlfatecPortfolioMethod lines={portfolioAnalysis.lines} userId={currentUser.id} />)}
         {clientModule === "alfatec_crypto_method" && (isFreeUser ? <FreeMethodExplanation method="Método AlfaTec Cripto" description="O método avalia fundamentos, rede, tokenomics, segurança, mercado, desenvolvimento, valuation on-chain e risco. Scores e análises completas estão disponíveis nos planos pagos." onUpgrade={() => setClientModule("plano")} /> : <AlfatecCryptoSection assets={assets} analyses={cryptoAnalyses} selectedTicker={cryptoTicker} loading={cryptoLoading} error={cryptoError} currentUserRole={currentUser.role} settings={cryptoSettings} onSelect={(ticker) => { setCryptoTicker(ticker); void loadCryptoData([ticker]); }} onRefresh={(ticker) => void loadCryptoData([ticker])} onSaveSettings={saveCryptoSettings} />)}
 
         {clientModule === "notificacoes" && <NotificationCenter />}

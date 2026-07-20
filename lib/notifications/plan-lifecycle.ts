@@ -33,7 +33,7 @@ export function ensurePlanLifecycleNotifications(state: CoreState, account: Core
         : { title: `Seu plano vence em ${Math.max(days, 0)} dias`, summary: "Confira a validade do acesso e solicite a renovação quando necessário.", priority: "attention" as const };
   const preference = preferenceFor(Array.isArray(state.notificationPreferences) ? state.notificationPreferences : [], account.id, "plan_expiration");
   if (preference.inAppEnabled) {
-    state.notifications = [createNotification({ userId: account.id, topic: "plan_expiration", title: copy.title, summary: copy.summary, priority: copy.priority, category: "plan", actionUrl: "/?menu=plano", dedupKey }), ...notifications].slice(0, 2000);
+    state.notifications = [createNotification({ userId: account.id, topic: "plan_expiration", title: copy.title, summary: copy.summary, priority: copy.priority, category: "plan", actionUrl: "/?menu=plano", dedupKey, emailManagedExternally: true }), ...notifications].slice(0, 2000);
   }
   const emailJobIds: string[] = [];
   const plan = state.plans.find((item) => item.id === account.planId);

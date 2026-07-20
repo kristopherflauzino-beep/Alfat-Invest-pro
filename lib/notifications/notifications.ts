@@ -31,6 +31,12 @@ export type AppNotification = {
   category: "opportunities" | "portfolio" | "plan" | "payments" | "risk" | "system";
   actionUrl?: string;
   dedupKey?: string;
+  emailManagedExternally?: boolean;
+  emailDeliveryStatus?: "sent" | "failed" | "not_configured";
+  emailAttempts?: number;
+  emailLastAttemptAt?: string;
+  emailNextAttemptAt?: string;
+  emailSentAt?: string;
   readAt?: string;
   createdAt: string;
 };
@@ -96,4 +102,46 @@ export function createNotification(input: Omit<AppNotification, "id" | "createdA
 
 export function preferenceFor(values: unknown[], userId: string, topic: NotificationTopic) {
   return mergeNotificationPreferences(userId, values).find((item) => item.topic === topic)!;
+}
+export function normalizeNotificationPreferenceChannels(
+  input: Pick<NotificationPreference, "inAppEnabled" | "emailEnabled" | "frequency">,
+  essential = false
+) {
+  const enabled = essential || input.inAppEnabled || input.emailEnabled;
+  return {
+    inAppEnabled: enabled,
+    emailEnabled: enabled,
+    frequency: essential || (enabled && input.frequency === "in_app_only")
+      ? "immediate" as const
+      : input.frequency
+  };
+}
+
+export function notificationEmailIsDue(
+  notification: AppNotification,
+  preference: NotificationPreference,
+  now = Date.now()
+) {
+  if (
+    notification.emailManagedExternally ||
+    notification.emailDeliveryStatus === "sent" ||
+    (notification.emailAttempts ?? 0) >= 4 ||
+    !preference.emailEnabled ||
+    preference.frequency === "in_app_only"
+  ) return false;
+
+  const createdAt = Date.parse(notification.createdAt);
+  const preferenceUpdatedAt = Date.parse(preference.updatedAt);
+  if (!Number.isFinite(createdAt)) return false;
+  if (Number.isFinite(preferenceUpdatedAt) && createdAt < preferenceUpdatedAt) return false;
+
+  const nextAttemptAt = notification.emailNextAttemptAt ? Date.parse(notification.emailNextAttemptAt) : 0;
+  if (Number.isFinite(nextAttemptAt) && nextAttemptAt > now) return false;
+
+  const delay = preference.frequency === "daily"
+    ? 24 * 60 * 60 * 1000
+    : preference.frequency === "weekly"
+      ? 7 * 24 * 60 * 60 * 1000
+      : 0;
+  return createdAt + delay <= now;
 }
