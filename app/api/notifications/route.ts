@@ -6,7 +6,7 @@ import { assertSameOrigin, requestErrorResponse } from "@/lib/server/request-sec
 import type { AppNotification } from "@/lib/notifications/notifications";
 import { ensurePlanLifecycleNotifications, dueEmailJobIds } from "@/lib/notifications/plan-lifecycle";
 import { deliverPlanEmailJob } from "@/lib/email/email-jobs";
-import { FREE_DAILY_NOTIFICATION_LIMIT, isFreePlan } from "@/lib/plans/access";
+import { getFreePlanLimits, isFreePlan } from "@/lib/plans/access";
 
 export const runtime = "nodejs";
 const actionSchema = z.object({
@@ -29,6 +29,7 @@ export async function GET(request: Request) {
     if (lifecycle.changed || dueJobs.length > 0) state = await readCoreState();
     const plan = state.plans.find((item) => item.id === account.planId);
     const free = account.role !== "ADMIN" && isFreePlan(account.planId, plan?.name);
+    const dailyLimit = free ? getFreePlanLimits(plan as Parameters<typeof getFreePlanLimits>[0]).notifications : null;
     const ownNotifications = (Array.isArray(state.notifications) ? state.notifications : [])
       .filter(isNotification)
       .filter((item) => item.userId === account.id)
@@ -38,12 +39,12 @@ export async function GET(request: Request) {
       const day = item.createdAt.slice(0, 10);
       const count = dailyCounts.get(day) ?? 0;
       dailyCounts.set(day, count + 1);
-      return count < FREE_DAILY_NOTIFICATION_LIMIT;
+      return count < (dailyLimit ?? 0);
     }) : ownNotifications;
     return NextResponse.json({
       notifications,
       unreadCount: notifications.filter((item) => !item.readAt).length,
-      dailyLimit: free ? FREE_DAILY_NOTIFICATION_LIMIT : null
+      dailyLimit
     }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     return authErrorResponse(error);

@@ -7,7 +7,7 @@ export default async function ConfirmEmailPage({ searchParams }: { searchParams:
     <AuthPageShell
       eyebrow="Cadastro"
       title="Confirmar seu e-mail"
-      description="Confirme seu endereço para prosseguir ao pagamento do plano selecionado."
+      description="Confirme seu endereço para concluir a etapa de e-mail do plano selecionado."
     >
       <RegistrationEmailConfirmation token={params.token || ""} />
     </AuthPageShell>

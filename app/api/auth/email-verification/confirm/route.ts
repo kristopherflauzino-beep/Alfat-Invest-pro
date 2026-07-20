@@ -10,10 +10,12 @@ import {
 } from "@/lib/auth/email-verification";
 import { sendEmail } from "@/lib/email/email-service";
 import {
+  freeAccountActivatedEmail,
   emailVerifiedAwaitingPaymentEmail,
   pendingRegistrationAdminEmail
 } from "@/lib/email/templates/registration";
 import { officialAppUrl } from "@/lib/email/templates/base";
+import { freePlanDisplayName, freePlanPermissions, isActiveFreePlan, isFreePlan } from "@/lib/plans/access";
 import { readCoreState, writeCoreState } from "@/lib/server/core-state";
 import { assertSameOrigin, requestErrorResponse } from "@/lib/server/request-security";
 
@@ -46,6 +48,113 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "O e-mail deste cadastro já foi confirmado." }, { status: 409 });
     }
 
+    const plan = state.plans.find((item) => item.id === registration.planId);
+    const free = isFreePlan(registration.planId, registration.planName);
+    if (free) {
+      if (!isActiveFreePlan(plan)) {
+        return NextResponse.json({ error: "O Plano Gratuito está indisponível no momento." }, { status: 422 });
+      }
+      const accountIndex = state.accounts.findIndex((item) =>
+        item.id === registration.userId ||
+        item.email.toLowerCase() === registration.email ||
+        item.username.toLowerCase() === registration.username
+      );
+      if (accountIndex < 0) {
+        return NextResponse.json({ error: "Conta vinculada ao cadastro não encontrada." }, { status: 404 });
+      }
+
+      const accountId = state.accounts[accountIndex].id;
+      const startedAt = now.toISOString().slice(0, 10);
+      const permissions = plan.permissions.length > 0 ? plan.permissions : [...freePlanPermissions];
+      registrations[registrationIndex] = {
+        ...registration,
+        emailVerifiedAt: now.toISOString(),
+        status: "activated",
+        paymentProvider: "none",
+        isFree: true,
+        requiresPayment: false,
+        activatedAt: now.toISOString(),
+        updatedAt: now.toISOString()
+      };
+      state.pendingRegistrations = registrations;
+      state.accounts[accountIndex] = {
+        ...state.accounts[accountIndex],
+        emailVerifiedAt: now.toISOString(),
+        status: "ativo",
+        registrationStatus: "activated",
+        registrationWorkflowId: registration.id,
+        registrationExpiresAt: undefined,
+        planId: plan.id,
+        planValue: 0,
+        selectedPlanName: freePlanDisplayName(plan.name),
+        selectedPlanDurationDays: plan.durationDays,
+        planStartedAt: startedAt,
+        dueDate: undefined,
+        subscriptionStatus: "active",
+        permissions,
+        subscription: {
+          id: crypto.randomUUID(),
+          userId: accountId,
+          planId: plan.id,
+          planName: freePlanDisplayName(plan.name),
+          planPriceInCents: 0,
+          paymentMethod: "none",
+          status: "active",
+          startedAt: now.toISOString(),
+          expiresAt: null,
+          autoRenew: false,
+          isFree: true,
+          createdAt: now.toISOString(),
+          updatedAt: now.toISOString()
+        },
+      };
+      state.emailVerificationTokens = tokens.map((item) =>
+        item.pendingRegistrationId === registration.id && !item.usedAt ? { ...item, usedAt: now.toISOString() } : item
+      );
+      const notifications = Array.isArray(state.notifications) ? state.notifications : [];
+      const adminAccounts = state.accounts.filter((item) => item.role === "ADMIN");
+      state.notifications = [
+        ...adminAccounts.map((admin) => ({
+          id: crypto.randomUUID(),
+          userId: admin.id,
+          topic: "account_status",
+          title: "Nova conta gratuita ativada",
+          summary: registration.name + " confirmou o e-mail e recebeu acesso ao Plano Gratuito.",
+          priority: "info",
+          category: "accounts",
+          actionUrl: "/",
+          createdAt: now.toISOString()
+        })),
+        ...notifications
+      ];
+      state.auditLogs = [{
+        id: crypto.randomUUID(),
+        action: "conta_gratuita_ativada",
+        userId: accountId,
+        userName: registration.name,
+        details: "E-mail confirmado; Plano Gratuito ativado sem cobrança.",
+        origin: "public_registration",
+        result: "activated",
+        createdAt: now.toISOString(),
+        risk: "baixo"
+      }, ...(state.auditLogs || [])];
+      await writeCoreState(state);
+
+      const template = freeAccountActivatedEmail({ name: registration.name, appUrl: officialAppUrl() });
+      await sendEmail({
+        to: registration.email,
+        ...template,
+        userId: accountId,
+        type: "free_account_activated",
+        idempotencyKey: "free-account-activated:" + registration.id
+      });
+      return NextResponse.json({
+        ok: true,
+        activated: true,
+        continuationUrl: "/",
+        message: "E-mail confirmado. Sua conta gratuita foi ativada e já está pronta para uso."
+      }, { headers: { "Cache-Control": "no-store" } });
+    }
     const continuation = createEmailVerificationToken();
     const updated = {
       ...registration,

@@ -32,7 +32,9 @@ export type PendingRegistration = {
   durationDays: number;
   permissions: string[];
   status: PendingRegistrationStatus;
-  paymentProvider: "mercado_pago";
+  paymentProvider: "mercado_pago" | "none";
+  isFree?: boolean;
+  requiresPayment?: boolean;
   paymentLinkOpenedAt?: string;
   paymentReportedAt?: string;
   paymentConfirmedAt?: string;

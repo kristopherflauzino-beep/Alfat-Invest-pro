@@ -6,7 +6,7 @@ import { hasDatabaseUrl, prisma } from "@/lib/prisma";
 import { revokeUserSessions, sessionUserId } from "@/lib/auth/session";
 import { inferAssetType, normalizeTicker } from "@/lib/market-data";
 import { CRYPTO_MAX_DECIMAL_PLACES, validateAssetQuantity, validateDecimalInput } from "@/lib/decimal/crypto-quantity";
-import { FREE_PORTFOLIO_LIMIT, freePlanPermissions, isFreePlan } from "@/lib/plans/access";
+import { DEFAULT_FREE_PLAN_LIMITS, FREE_REQUIRES_PAYMENT, FREE_TECHNICAL_DURATION_DAYS, freePlanPermissions, getFreePlanLimits, isFreePlan } from "@/lib/plans/access";
 
 export const runtime = "nodejs";
 
@@ -39,7 +39,7 @@ type AppStatePayload = {
 
 const allClientModules = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "alfatec_portfolio_method", "radar", "notificacoes", "relatorios", "graham_valuation", "alfatec_fiis", "alfatec_crypto_method", "plano", "configuracoes"];
 const appStateBlobPath = process.env.APP_STATE_BLOB_PATH || "alfatec-invest-pro/app-state.json";
-const defaultFreePlan = { id: "free", name: "FREE", value: 0, durationDays: 36500, status: "ativo", permissions: [...freePlanPermissions], updatedBy: "Sistema" };
+const defaultFreePlan = { id: "free", name: "FREE", value: 0, durationDays: FREE_TECHNICAL_DURATION_DAYS, status: "ativo", permissions: [...freePlanPermissions], limits: { ...DEFAULT_FREE_PLAN_LIMITS }, isFree: true, requiresPayment: FREE_REQUIRES_PAYMENT, updatedBy: "Sistema" };
 const defaultGrahamSettings = { defaultY: 5.5, minGrowth: 0, maxGrowth: 20, scoreWeight: 10, enabled: true, clientsCanEditGrowth: true, clientsCanEditY: false };
 const defaultFiiWeights = { qualidade: 20, renda: 18, risco: 16, valuation: 14, gestao: 12, liquidez: 6, diversificacao: 14 };
 const defaultFiiSettings = { enabled: true, referenceRate: 6.5, referenceRateSource: "Parametro configurado pelo administrador", minimumConfidence: "Media", weightsByKind: { tijolo: { qualidade: 20, renda: 20, risco: 15, valuation: 15, gestao: 10, liquidez: 5, diversificacao: 15 }, renda_urbana: { qualidade: 20, renda: 20, risco: 15, valuation: 15, gestao: 10, liquidez: 5, diversificacao: 15 }, papel: { qualidade: 25, renda: 15, risco: 20, valuation: 10, gestao: 10, liquidez: 5, diversificacao: 15 }, fof: { qualidade: 25, renda: 15, risco: 10, valuation: 15, gestao: 20, liquidez: 5, diversificacao: 10 }, hibrido: defaultFiiWeights, desenvolvimento: { qualidade: 20, renda: 10, risco: 25, valuation: 15, gestao: 15, liquidez: 5, diversificacao: 10 }, infraestrutura: { qualidade: 20, renda: 20, risco: 15, valuation: 15, gestao: 10, liquidez: 5, diversificacao: 15 }, outro: { qualidade: 18, renda: 18, risco: 18, valuation: 16, gestao: 10, liquidez: 8, diversificacao: 12 } } };
@@ -133,7 +133,23 @@ function mergeDefaultAccounts(accounts: unknown[]) {
 
 function mergeDefaultPlans(plans: unknown[]) {
   const merged = [...plans];
-  if (!merged.some((plan) => stringField(plan, "id") === "free")) merged.unshift(defaultFreePlan);
+  const freeIndex = merged.findIndex((plan) => stringField(plan, "id") === "free");
+  if (freeIndex < 0) {
+    merged.unshift(defaultFreePlan);
+    return merged;
+  }
+  const current = merged[freeIndex] && typeof merged[freeIndex] === "object"
+    ? merged[freeIndex] as Record<string, unknown>
+    : {};
+  merged[freeIndex] = {
+    ...defaultFreePlan,
+    ...current,
+    value: 0,
+    durationDays: FREE_TECHNICAL_DURATION_DAYS,
+    limits: getFreePlanLimits(current as Parameters<typeof getFreePlanLimits>[0]),
+    isFree: true,
+    requiresPayment: FREE_REQUIRES_PAYMENT
+  };
   return merged;
 }
 function ensureNotificationPermission(value: unknown) {
@@ -415,9 +431,10 @@ export async function PUT(request: Request) {
     const actorPlanId = stringField(actor, "planId");
     const actorPlan = current.plans.find((plan) => stringField(plan, "id") === actorPlanId);
     const actorPlanName = actorPlan && typeof actorPlan === "object" ? String((actorPlan as Record<string, unknown>).name ?? "") : "";
-    if (role !== "ADMIN" && isFreePlan(actorPlanId, actorPlanName) && normalizedPortfolio.value.length > FREE_PORTFOLIO_LIMIT) {
+    const actorFreeLimits = getFreePlanLimits(actorPlan as Parameters<typeof getFreePlanLimits>[0]);
+    if (role !== "ADMIN" && isFreePlan(actorPlanId, actorPlanName) && normalizedPortfolio.value.length > actorFreeLimits.portfolio) {
       return NextResponse.json({
-        error: `Seu Plano Gratuito permite cadastrar até ${FREE_PORTFOLIO_LIMIT} ativos. Faça upgrade para cadastrar ativos ilimitados.`
+        error: `Seu Plano Gratuito permite cadastrar até ${actorFreeLimits.portfolio} ativos. Faça upgrade para cadastrar ativos ilimitados.`
       }, { status: 403 });
     }
     incoming.portfolio = normalizedPortfolio.value;

@@ -17,6 +17,7 @@ import {
 import { sendEmail } from "@/lib/email/email-service";
 import { registrationConfirmationEmail } from "@/lib/email/templates/registration";
 import { officialAppUrl } from "@/lib/email/templates/base";
+import { freePlanDisplayName, isActiveFreePlan, isFreePlan } from "@/lib/plans/access";
 import { readCoreState, writeCoreState } from "@/lib/server/core-state";
 import { assertSameOrigin, requestErrorResponse } from "@/lib/server/request-security";
 
@@ -120,7 +121,7 @@ export async function POST(request: Request) {
       await writeCoreState(state);
 
       const confirmationUrl = officialAppUrl() + "/confirmar-email?token=" + encodeURIComponent(generated.token);
-      const template = registrationConfirmationEmail({ name: workflow.name, confirmationUrl, planName: workflow.planName });
+      const template = registrationConfirmationEmail({ name: workflow.name, confirmationUrl, planName: workflow.planName, isFree: isFreePlan(workflow.planId, workflow.planName) });
       const delivery = await sendEmail({
         to: workflow.email,
         ...template,
@@ -210,7 +211,7 @@ export async function POST(request: Request) {
       await writeCoreState(state);
 
       const confirmationUrl = officialAppUrl() + "/confirmar-email?token=" + encodeURIComponent(generated.token);
-      const template = registrationConfirmationEmail({ name: workflow.name, confirmationUrl, planName: workflow.planName });
+      const template = registrationConfirmationEmail({ name: workflow.name, confirmationUrl, planName: workflow.planName, isFree: isFreePlan(workflow.planId, workflow.planName) });
       const delivery = await sendEmail({
         to: workflow.email,
         ...template,
@@ -231,6 +232,11 @@ export async function POST(request: Request) {
     const plan = state.plans.find((item) => item.id === input.planId && item.status === "ativo");
     if (!plan) return NextResponse.json({ error: "Plano indisponível." }, { status: 422 });
 
+    const free = isFreePlan(plan.id, plan.name);
+    if (free ? !isActiveFreePlan(plan) : !Number.isFinite(plan.value) || plan.value <= 0) {
+      return NextResponse.json({ error: "O valor ou o status do plano selecionado é inválido." }, { status: 422 });
+    }
+
     const accountId = crypto.randomUUID();
     const workflowId = crypto.randomUUID();
     const passwordHash = await hashPassword(input.password);
@@ -247,12 +253,14 @@ export async function POST(request: Request) {
       acceptedPrivacyAt: now.toISOString(),
       acceptedMarketingAt: input.acceptMarketing ? now.toISOString() : undefined,
       planId: plan.id,
-      planName: plan.name,
+      planName: freePlanDisplayName(plan.name),
       planPriceInCents: Math.round(plan.value * 100),
       durationDays: plan.durationDays,
       permissions: plan.permissions,
       status: "awaiting_email_confirmation",
-      paymentProvider: "mercado_pago",
+      paymentProvider: free ? "none" : "mercado_pago",
+      isFree: free,
+      requiresPayment: !free,
       expiresAt,
       createdAt: now.toISOString(),
       updatedAt: now.toISOString()
@@ -272,7 +280,7 @@ export async function POST(request: Request) {
       registrationStatus: "awaiting_email_confirmation",
       registrationWorkflowId: workflowId,
       registrationExpiresAt: expiresAt,
-      selectedPlanName: plan.name,
+      selectedPlanName: freePlanDisplayName(plan.name),
       selectedPlanDurationDays: plan.durationDays,
       acceptedTermsAt: registration.acceptedTermsAt,
       acceptedPrivacyAt: registration.acceptedPrivacyAt,
@@ -311,7 +319,7 @@ export async function POST(request: Request) {
     await writeCoreState(state);
 
     const confirmationUrl = officialAppUrl() + "/confirmar-email?token=" + encodeURIComponent(generated.token);
-    const template = registrationConfirmationEmail({ name: input.name, confirmationUrl, planName: plan.name });
+    const template = registrationConfirmationEmail({ name: input.name, confirmationUrl, planName: freePlanDisplayName(plan.name), isFree: free });
     const delivery = await sendEmail({
       to: email,
       ...template,

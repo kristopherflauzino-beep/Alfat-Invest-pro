@@ -147,7 +147,7 @@ import { ExternalFinanceLink } from "@/components/assets/ExternalFinanceLink";
 import { externalDataSourceLabel } from "@/lib/assets/external-finance-url";
 import { StockOpportunityFilters } from "@/components/opportunities/StockOpportunityFilters";
 import { defaultStockOpportunityFilters, filterAndSortStockOpportunities, type StockOpportunityFilterState } from "@/lib/opportunities/stock-filters";
-import { FREE_PORTFOLIO_LIMIT, freePlanPermissions, isFreeLockedModule, isFreePlan } from "@/lib/plans/access";
+import { DEFAULT_FREE_PLAN_LIMITS, FREE_REQUIRES_PAYMENT, FREE_TECHNICAL_DURATION_DAYS, freePlanDisplayName, freePlanLockedFeatures, freePlanPermissions, getFreePlanBenefits, getFreePlanLimits, isFreeLockedModule, isFreePlan, type FreePlanLimits } from "@/lib/plans/access";
 
 type Role = "ADMIN" | "CLIENTE";
 type ClientStatus = "ativo" | "pendente" | "bloqueado" | "vencido";
@@ -188,6 +188,9 @@ type Plan = {
   status: "ativo" | "inativo";
   permissions: ClientModuleId[];
   updatedAt?: string;
+  limits?: FreePlanLimits;
+  isFree?: boolean;
+  requiresPayment?: boolean;
   updatedBy?: string;
   notes?: string;
 };
@@ -203,6 +206,7 @@ type Account = {
   planId?: string;
   planValue?: number;
   status: ClientStatus;
+  selectedPlanName?: string;
   createdAt: string;
   dueDate?: string;
   planStartedAt?: string;
@@ -290,7 +294,7 @@ const ranges: Array<{ id: RangeId; label: string; points: number }> = [
 const suggestedPlanValues: Record<string, number> = { semanal: 9.9, mensal: 24.9, anual: 199.9 };
 const legacyPlanValues: Record<string, number[]> = { semanal: [49.9], mensal: [149.9], anual: [1299.9] };
 const defaultPlans: Plan[] = [
-  { id: "free", name: "FREE", value: 0, durationDays: 36500, status: "ativo", permissions: [...freePlanPermissions] as ClientModuleId[] },
+  { id: "free", name: "FREE", value: 0, durationDays: FREE_TECHNICAL_DURATION_DAYS, status: "ativo", permissions: [...freePlanPermissions] as ClientModuleId[], limits: { ...DEFAULT_FREE_PLAN_LIMITS }, isFree: true, requiresPayment: FREE_REQUIRES_PAYMENT },
   { id: "semanal", name: "Semanal", value: suggestedPlanValues.semanal, durationDays: 7, status: "ativo", permissions: allClientModules },
   { id: "mensal", name: "Mensal", value: suggestedPlanValues.mensal, durationDays: 30, status: "ativo", permissions: allClientModules },
   { id: "anual", name: "Anual", value: suggestedPlanValues.anual, durationDays: 365, status: "ativo", permissions: allClientModules }
@@ -761,8 +765,15 @@ export default function AlfatecInvestPro() {
   const currentUser = useMemo(() => accounts.find((account) => account.id === sessionId) ?? null, [accounts, sessionId]);
   const currentPlan = useMemo(() => plans.find((plan) => plan.id === currentUser?.planId), [plans, currentUser?.planId]);
   const isFreeUser = currentUser?.role === "CLIENTE" && isFreePlan(currentUser.planId, currentPlan?.name);
+  const currentFreeLimits = getFreePlanLimits(currentPlan);
   const clients = useMemo(() => accounts.filter((account) => account.role === "CLIENTE"), [accounts]);
   const financial = useMemo(() => buildFinancialSummary(clients, plans, payments), [clients, plans, payments]);
+  const freeClients = useMemo(() => clients.filter((client) => isFreePlan(client.planId, String(client.selectedPlanName || ""))), [clients]);
+  const paidClients = useMemo(() => clients.filter((client) => client.planId && !isFreePlan(client.planId, String(client.selectedPlanName || ""))), [clients]);
+  const newFreeClients = useMemo(() => freeClients.filter((client) => Date.parse(client.createdAt) >= Date.now() - 30 * 24 * 60 * 60 * 1000), [freeClients]);
+  const freeUpgrades = useMemo(() => auditLogs.filter((entry) => entry.action === "upgrade_free_pago").length, [auditLogs]);
+  const freeConversionBase = freeClients.length + freeUpgrades;
+  const paidConversionRate = freeConversionBase > 0 ? freeUpgrades / freeConversionBase * 100 : 0;
   const globalSuggestions = useMemo(() => searchAssets(globalSearch, "TODOS", assets).slice(0, 8), [globalSearch, assets]);
   const comparison = useMemo(() => buildComparison(assetA, assetB, range), [assetA, assetB, range]);
   const returnA = performance(rangeHistory(assetA, range));
@@ -1043,8 +1054,8 @@ export default function AlfatecInvestPro() {
   }
 
   function addAssetToPortfolio(asset: Asset) {
-    if (isFreeUser && portfolio.length >= FREE_PORTFOLIO_LIMIT) {
-      setPortfolioFormError(`Seu Plano Gratuito permite cadastrar até ${FREE_PORTFOLIO_LIMIT} ativos. Faça upgrade para cadastrar ativos ilimitados.`);
+    if (isFreeUser && portfolio.length >= currentFreeLimits.portfolio) {
+      setPortfolioFormError(`Seu Plano Gratuito permite cadastrar até ${currentFreeLimits.portfolio} ativos. Faça upgrade para cadastrar ativos ilimitados.`);
       setClientModule("carteira");
       return;
     }
@@ -1053,8 +1064,8 @@ export default function AlfatecInvestPro() {
   }
   function addPortfolioPosition(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (isFreeUser && portfolio.length >= FREE_PORTFOLIO_LIMIT) {
-      setPortfolioFormError(`Seu Plano Gratuito permite cadastrar até ${FREE_PORTFOLIO_LIMIT} ativos. Faça upgrade para cadastrar ativos ilimitados.`);
+    if (isFreeUser && portfolio.length >= currentFreeLimits.portfolio) {
+      setPortfolioFormError(`Seu Plano Gratuito permite cadastrar até ${currentFreeLimits.portfolio} ativos. Faça upgrade para cadastrar ativos ilimitados.`);
       return;
     }
     const formData = new FormData(event.currentTarget);
@@ -1124,7 +1135,20 @@ export default function AlfatecInvestPro() {
   function changeClientPlan(client: Account, planId: string) {
     const plan = plans.find((item) => item.id === planId);
     if (!plan) return;
-    updateClient(client.id, { planId, planValue: plan.value, planStartedAt: todayIso(), dueDate: addDays(plan.durationDays), status: "ativo", permissions: plan.permissions });
+    const previousPlan = plans.find((item) => item.id === client.planId);
+    const movingFromFreeToPaid = isFreePlan(previousPlan?.id, previousPlan?.name) && !isFreePlan(plan.id, plan.name);
+    const movingToFree = isFreePlan(plan.id, plan.name);
+    updateClient(client.id, {
+      planId,
+      planValue: plan.value,
+      selectedPlanName: movingToFree ? freePlanDisplayName(plan.name) : plan.name,
+      planStartedAt: todayIso(),
+      dueDate: movingToFree ? undefined : addDays(plan.durationDays),
+      subscriptionStatus: "active",
+      status: "ativo",
+      permissions: plan.permissions
+    });
+    logAudit(movingFromFreeToPaid ? "upgrade_free_pago" : "alteracao_plano_cliente", `${client.name}: ${previousPlan?.name || "sem plano"} para ${movingToFree ? freePlanDisplayName(plan.name) : plan.name}.`, "medio");
   }
 
 
@@ -1240,11 +1264,16 @@ export default function AlfatecInvestPro() {
       <Shell darkMode={darkMode} setDarkMode={setDarkMode} logout={logout} user={currentUser} modules={adminNavigationModules} activeId={adminModule} onMenu={handleAdminMenu}>
         {adminModule === "admin-dashboard" && (
           <Section title="Dashboard Admin" subtitle="Controle geral de clientes, planos, bloqueios e receita." eyebrow="Administração">
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               <MetricCard label="Clientes cadastrados" value={String(clients.length)} icon={Users} tone="blue" />
               <MetricCard label="Clientes ativos" value={String(financial.active)} icon={CheckCircle2} tone="green" />
               <MetricCard label="Clientes bloqueados" value={String(financial.blocked)} icon={Lock} tone="red" />
               <MetricCard label="Receita recebida" value={money.format(financial.received)} icon={CircleDollarSign} tone="teal" />
+              <MetricCard label="Usuários no Plano FREE" value={String(freeClients.length)} icon={Users} tone="teal" />
+              <MetricCard label="Novos usuários FREE (30 dias)" value={String(newFreeClients.length)} icon={Plus} tone="blue" />
+              <MetricCard label="Usuários em planos pagos" value={String(paidClients.length)} icon={WalletCards} tone="green" />
+              <MetricCard label="Upgrades FREE para pago" value={String(freeUpgrades)} icon={TrendingUp} tone="green" />
+              <MetricCard label="Conversão FREE para pago" value={pct(paidConversionRate)} icon={TrendingUp} tone="blue" />
             </div>
             <div className="mt-6 grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
               <PremiumCard title="Receita por status" description="Assinaturas confirmadas pelo administrador." icon={BarChart3}>
@@ -1408,7 +1437,7 @@ export default function AlfatecInvestPro() {
             {opportunityCategory === "ACAO" && (
               <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
                 <PremiumCard title="Filtros de Oportunidades em Ações" description="Critérios cumulativos de fundamentos, liquidez, confiança e Número de Graham." icon={Search}>
-                  {isFreeUser ? <FreeAccessSummary text="O Plano FREE mostra as 10 principais oportunidades do dia. Filtros avan?ados e score detalhado est?o dispon?veis nos planos pagos." /> : (
+                  {isFreeUser ? <FreeAccessSummary text={`O Plano FREE mostra as ${currentFreeLimits.opportunities} principais oportunidades do dia. Filtros avançados e score detalhado estão disponíveis nos planos pagos.`} /> : (
                     <StockOpportunityFilters
                       value={stockOpportunityFilters}
                       onChange={setStockOpportunityFilters}
@@ -1419,7 +1448,7 @@ export default function AlfatecInvestPro() {
                   )}
                 </PremiumCard>
                 <PremiumCard title="Oportunidades em ações" description="O Número de Graham é apenas um componente e a fórmula com crescimento não é usada nesta tela." icon={TrendingUp}>
-                  {isFreeUser ? <FreeOpportunityList assets={stockOpportunityAssets.slice(0, 10)} onSelect={(asset) => selectAsset(asset, "mercado")} /> : <GrahamOpportunityTable assets={stockOpportunityAssets.slice(0, 50)} onSelect={(asset) => selectAsset(asset, "mercado")} />}
+                  {isFreeUser ? <FreeOpportunityList assets={stockOpportunityAssets.slice(0, currentFreeLimits.opportunities)} onSelect={(asset) => selectAsset(asset, "mercado")} /> : <GrahamOpportunityTable assets={stockOpportunityAssets.slice(0, 50)} onSelect={(asset) => selectAsset(asset, "mercado")} />}
                   {!stockOpportunityAssets.length && <p className="mt-4 rounded-2xl bg-amber-500/10 p-4 text-sm font-semibold text-amber-800 dark:text-amber-200">Nenhuma ação atende aos filtros atuais. Dados ausentes de Graham não são substituídos por zero.</p>}
                 </PremiumCard>
               </div>
@@ -1428,14 +1457,14 @@ export default function AlfatecInvestPro() {
             {opportunityCategory === "FII" && (
               <PremiumCard title="Oportunidades em FIIs" description="Score AlfaTec FIIs, renda recorrente, risco, valuation, liquidez e confiança dos dados." icon={Building2}>
                 {isFreeUser ? <FreeAccessSummary text="Top 10 FIIs do dia no Plano FREE. Use um plano pago para acessar filtros e análise detalhada." /> : <FiiOpportunityFilters value={fiiFilters} onChange={(patch) => setFiiFilters((current) => ({ ...current, ...patch }))} segments={fiiSegments} />}
-                <div className="mt-4">{isFreeUser ? <FreeOpportunityList assets={fiiOpportunityAnalyses.slice(0, 10).map((item) => item.asset)} onSelect={(asset) => selectAsset(asset, "mercado")} /> : <FiiOpportunitiesTable items={fiiOpportunityAnalyses.slice(0, 50)} onSelect={(asset) => { setFiiAsset(asset); setFiiSearch(asset.ticker); setClientModule("alfatec_fiis"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_fiis"); }} />}</div>
+                <div className="mt-4">{isFreeUser ? <FreeOpportunityList assets={fiiOpportunityAnalyses.slice(0, currentFreeLimits.opportunities).map((item) => item.asset)} onSelect={(asset) => selectAsset(asset, "mercado")} /> : <FiiOpportunitiesTable items={fiiOpportunityAnalyses.slice(0, 50)} onSelect={(asset) => { setFiiAsset(asset); setFiiSearch(asset.ticker); setClientModule("alfatec_fiis"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_fiis"); }} />}</div>
               </PremiumCard>
             )}
 
             {opportunityCategory === "CRIPTO" && (
               <PremiumCard title="Oportunidades em criptoativos" description="Score AlfaTec Cripto com dados reais, categoria, mercado, tokenomics, risco e confiança." icon={Bitcoin}>
                 {isFreeUser ? <FreeAccessSummary text="Top 10 criptoativos do dia no Plano FREE. Filtros e score detalhado fazem parte dos planos pagos." /> : <CryptoOpportunityFilters value={cryptoFilters} onChange={(patch) => setCryptoFilters((current) => ({ ...current, ...patch }))} categories={cryptoFilterCategories} />}
-                <div className="mt-4">{isFreeUser ? <FreeOpportunityList assets={rankedAssets.filter((asset) => asset.type === "CRIPTO").slice(0, 10)} onSelect={(asset) => selectAsset(asset, "mercado")} /> : <CryptoOpportunityTable items={cryptoOpportunityAnalyses} onSelect={(ticker) => { setCryptoTicker(ticker); setClientModule("alfatec_crypto_method"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_crypto_method"); }} />}</div>
+                <div className="mt-4">{isFreeUser ? <FreeOpportunityList assets={rankedAssets.filter((asset) => asset.type === "CRIPTO").slice(0, currentFreeLimits.opportunities)} onSelect={(asset) => selectAsset(asset, "mercado")} /> : <CryptoOpportunityTable items={cryptoOpportunityAnalyses} onSelect={(ticker) => { setCryptoTicker(ticker); setClientModule("alfatec_crypto_method"); if (currentUser.role === "ADMIN") setAdminModule("alfatec_crypto_method"); }} />}</div>
               </PremiumCard>
             )}
           </Section>
@@ -1480,9 +1509,9 @@ export default function AlfatecInvestPro() {
                   <Input name="averagePrice" type="text" inputMode="decimal" label="Preço médio" value={portfolioAveragePriceInput} onChange={(event) => setPortfolioAveragePriceInput(event.target.value)} placeholder="0,00" required />
                   <Input name="broker" label="Corretora" placeholder="XP, Rico, BTG..." />
                   <Input name="purchaseDate" type="date" label="Data da compra" />
-                  {isFreeUser && <p className="rounded-lg bg-cyan-500/10 p-3 text-sm font-semibold text-cyan-800 dark:text-cyan-200">Plano FREE: {portfolio.length} de {FREE_PORTFOLIO_LIMIT} posições utilizadas.</p>}
+                  {isFreeUser && <p className="rounded-lg bg-cyan-500/10 p-3 text-sm font-semibold text-cyan-800 dark:text-cyan-200">Plano FREE: {portfolio.length} de {currentFreeLimits.portfolio} posições utilizadas.</p>}
                   {portfolioFormError && <p className="rounded-lg bg-red-500/10 p-3 text-sm font-semibold text-red-700 dark:text-red-300">{portfolioFormError}</p>}
-                  <button disabled={Boolean(isFreeUser && portfolio.length >= FREE_PORTFOLIO_LIMIT)} className="rounded-lg bg-teal-500 px-4 py-3 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">Adicionar à carteira</button>
+                  <button disabled={Boolean(isFreeUser && portfolio.length >= currentFreeLimits.portfolio)} className="rounded-lg bg-teal-500 px-4 py-3 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">Adicionar à carteira</button>
                 </form>
               </PremiumCard>
               <PremiumCard title="Posições" description="Valores financeiros recalculados automaticamente com o preço atual." icon={WalletCards}>
@@ -1553,17 +1582,68 @@ export default function AlfatecInvestPro() {
 
 function Shell({ darkMode, setDarkMode, logout, user, modules, activeId, onMenu, children }: { darkMode: boolean; setDarkMode: (value: boolean) => void; logout: () => void; user: Account; modules: Array<{ id: string; label: string; icon: React.ComponentType<{ className?: string }>; group?: string; locked?: boolean }>; activeId: string; onMenu: (id: string) => void; children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const sidebarRef = useRef<HTMLElement>(null);
+  const navigationRef = useRef<HTMLElement>(null);
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const adminGroups = ["Área do cliente", "Administração"];
   const activeModule = modules.find((item) => item.id === activeId);
+  const freeUser = user.role === "CLIENTE" && isFreePlan(user.planId, String(user.selectedPlanName || ""));
   const groupedModules = user.role === "ADMIN"
     ? adminGroups.map((group) => ({ group, items: modules.filter((item) => item.group === group) })).filter((item) => item.items.length)
     : [{ group: "Menu principal", items: modules }];
+
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const sidebar = sidebarRef.current;
+    if (!sidebar) return;
+    const focusableSelector = 'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    const focusable = Array.from(sidebar.querySelectorAll<HTMLElement>(focusableSelector));
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSidebarOpen(false);
+        return;
+      }
+      if (event.key === "Tab" && first && last) {
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    const mobile = window.matchMedia("(max-width: 1023px)").matches;
+    if (mobile) document.body.style.overflow = "hidden";
+    document.addEventListener("keydown", handleKeyDown);
+    first?.focus();
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      if (mobile) document.body.style.overflow = "";
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, [sidebarOpen]);
+
+  useEffect(() => {
+    const navigation = navigationRef.current;
+    const active = navigation?.querySelector<HTMLElement>('[data-active="true"]');
+    if (!navigation || !active) return;
+    const navigationRect = navigation.getBoundingClientRect();
+    const activeRect = active.getBoundingClientRect();
+    if (activeRect.top < navigationRect.top || activeRect.bottom > navigationRect.bottom) active.scrollIntoView({ block: "nearest" });
+  }, [activeId, modules]);
 
   const renderMenuButton = (item: { id: string; label: string; icon: React.ComponentType<{ className?: string }>; locked?: boolean }) => {
     const Icon = item.icon;
     return (
       <button
         key={item.id}
+        data-active={activeId === item.id}
+        aria-current={activeId === item.id ? "page" : undefined}
         aria-label={item.locked ? `${item.label}, recurso bloqueado no plano atual` : item.label}
         title={item.locked ? `${item.label} disponível nos planos pagos` : undefined}
         onClick={() => {
@@ -1602,11 +1682,17 @@ function Shell({ darkMode, setDarkMode, logout, user, modules, activeId, onMenu,
       {sidebarOpen && <button aria-label="Fechar menu lateral" onClick={() => setSidebarOpen(false)} className="fixed inset-0 z-40 bg-slate-950/60 backdrop-blur-sm lg:hidden" />}
 
       <div className="flex min-h-screen">
-        <aside className={cls(
-          "fixed inset-y-0 left-0 z-50 flex w-[19rem] flex-col border-r border-slate-200/70 bg-white/95 shadow-2xl backdrop-blur-2xl transition-transform duration-300 dark:border-white/10 dark:bg-slate-950/95 lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 lg:shadow-none",
+        <aside
+          ref={sidebarRef}
+          id="main-sidebar"
+          data-open={sidebarOpen}
+          aria-label="Menu principal"
+          className={cls(
+          "fixed inset-y-0 left-0 z-50 flex h-dvh w-[19rem] flex-col border-r border-slate-200/70 bg-white/95 shadow-2xl backdrop-blur-2xl transition-transform duration-300 dark:border-white/10 dark:bg-slate-950/95 lg:translate-x-0 lg:shadow-none",
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         )}>
-          <div className="border-b border-slate-200/70 p-5 dark:border-white/10">
+          <div className="relative shrink-0 border-b border-slate-200/70 p-5 dark:border-white/10">
+            <button type="button" onClick={() => setSidebarOpen(false)} className="absolute right-3 top-3 rounded-xl border border-slate-200 bg-white p-2 dark:border-white/10 dark:bg-white/5 lg:hidden" aria-label="Fechar menu lateral"><X className="h-4 w-4" /></button>
             <div className="flex items-center gap-3">
               <img src="/logo-alfatec.png" alt="Invest Pro" className="h-14 w-14 object-contain" />
               <div className="min-w-0">
@@ -1616,12 +1702,12 @@ function Shell({ darkMode, setDarkMode, logout, user, modules, activeId, onMenu,
             </div>
             <div className="mt-5 rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/[0.04]">
               <p className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-400">Perfil</p>
-              <p className="mt-1 truncate text-sm font-black">{user.name}</p>
+              <div className="mt-1 flex min-w-0 items-center gap-2"><p className="min-w-0 truncate text-sm font-black">{user.name}</p>{freeUser && <span className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-black text-emerald-700 dark:text-emerald-300">FREE</span>}</div>
               <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{user.role === "ADMIN" ? "Administrador" : "Cliente"}</p>
             </div>
           </div>
 
-          <nav className="flex-1 space-y-6 overflow-y-auto px-4 py-5">
+          <nav ref={navigationRef} aria-label="Navegação principal" className="min-h-0 flex-1 space-y-6 overflow-x-hidden overflow-y-auto overscroll-contain px-4 py-5 [scrollbar-gutter:stable]">
             {groupedModules.map(({ group, items }) => (
               <div key={group}>
                 <div className="mb-2 flex items-center justify-between px-2">
@@ -1634,7 +1720,7 @@ function Shell({ darkMode, setDarkMode, logout, user, modules, activeId, onMenu,
             {!modules.length && <p className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-500 dark:bg-white/5">Nenhum menu liberado para este acesso.</p>}
           </nav>
 
-          <div className="border-t border-slate-200/70 p-4 dark:border-white/10">
+          <div className="shrink-0 border-t border-slate-200/70 p-4 dark:border-white/10">
             <div className="grid grid-cols-2 gap-2">
               <button onClick={() => setDarkMode(!darkMode)} className="flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm font-bold transition hover:scale-[1.02] dark:border-white/10 dark:bg-white/5">
                 {darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
@@ -1648,11 +1734,11 @@ function Shell({ darkMode, setDarkMode, logout, user, modules, activeId, onMenu,
           </div>
         </aside>
 
-        <section className="min-w-0 flex-1">
+        <section className="min-w-0 flex-1 lg:ml-[19rem]">
           <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/85 backdrop-blur-2xl dark:border-white/10 dark:bg-slate-950/85">
             <div className="flex h-20 items-center justify-between gap-3 px-4 lg:px-8">
               <div className="flex min-w-0 items-center gap-3">
-                <button onClick={() => setSidebarOpen(true)} className="rounded-2xl border border-slate-200 bg-white p-3 transition hover:scale-105 dark:border-white/10 dark:bg-white/5 lg:hidden" aria-label="Abrir menu lateral"><Menu className="h-5 w-5" /></button>
+                <button ref={menuTriggerRef} type="button" onClick={() => setSidebarOpen(true)} className="rounded-2xl border border-slate-200 bg-white p-3 transition hover:scale-105 dark:border-white/10 dark:bg-white/5 lg:hidden" aria-label="Abrir menu lateral" aria-expanded={sidebarOpen} aria-controls="main-sidebar"><Menu className="h-5 w-5" /></button>
                 <div className="min-w-0">
                   <p className="text-[10px] font-black uppercase tracking-[0.28em] text-cyan-500">{user.role === "ADMIN" ? "Painel administrativo" : "Área do cliente"}</p>
                   <h2 className="truncate text-lg font-black sm:text-2xl">{activeModule?.label ?? "INVEST PRO"}</h2>
@@ -1674,7 +1760,7 @@ function Shell({ darkMode, setDarkMode, logout, user, modules, activeId, onMenu,
 
 function LoginScreen({ darkMode, setDarkMode, loginUser, setLoginUser, loginPassword, setLoginPassword, showPassword, setShowPassword, loginError, registerMessage, databaseError, plans, stateLoaded, onSubmit, onRegister }: { darkMode: boolean; setDarkMode: (value: boolean) => void; loginUser: string; setLoginUser: (value: string) => void; loginPassword: string; setLoginPassword: (value: string) => void; showPassword: boolean; setShowPassword: (value: boolean) => void; loginError: string; registerMessage: string; databaseError: string; plans: Plan[]; stateLoaded: boolean; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; onRegister: (payload: PublicRegistrationPayload) => Promise<PublicRegistrationResult> }) {
   const [mode, setMode] = useState<"login" | "register">("login");
-  const activePlans = plans.filter((plan) => plan.status === "ativo" && !isFreePlan(plan.id, plan.name) && plan.value > 0);
+  const activePlans = plans.filter((plan) => plan.status === "ativo" && (isFreePlan(plan.id, plan.name) ? plan.value === 0 : plan.value > 0));
 
   return (
     <div className="relative grid min-h-screen overflow-y-auto bg-slate-100 px-4 py-6 text-slate-950 dark:bg-[#020817] dark:text-slate-100 sm:px-6">
@@ -1773,7 +1859,7 @@ function MetricCard({ label, value, icon: Icon, tone }: { label: string; value: 
 function AssetCard({ asset, favorites, onSelect, onFavorite }: { asset: Asset; favorites: string[]; onSelect: () => void; onFavorite: () => void }) {
   const source = externalDataSourceLabel(asset.sourceLabel, asset.source);
   return (
-    <div className="min-w-0 rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/5">
+    <div className="asset-metrics-container min-w-0 rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/5">
       <div className="flex min-w-0 items-start justify-between gap-3">
         <button onClick={onSelect} className="min-w-0 flex-1 text-left" title={asset.name}>
           <p className="overflow-wrap-anywhere text-xs text-slate-500 dark:text-slate-300">{typeLabels[asset.type]} • {asset.segment}</p>
@@ -1795,7 +1881,7 @@ function AssetPanel({ asset, favorites, setFavorites, onAddToPortfolio, onOpenFi
   const source = externalDataSourceLabel(asset.sourceLabel, asset.source);
   return (
     <PremiumCard title="Página do ativo" description="Informações, indicadores, IA e fundamentos." icon={ShieldCheck}>
-      <div className="min-w-0 rounded-3xl bg-gradient-to-br from-slate-950 to-slate-800 p-5 text-white">
+      <div className="asset-metrics-container min-w-0 rounded-3xl bg-gradient-to-br from-slate-950 to-slate-800 p-5 text-white">
         <div className="flex min-w-0 items-start justify-between gap-4">
           <div className="min-w-0">
             <p className="break-words text-sm text-cyan-300">{typeLabels[asset.type]} • {asset.segment}</p>
@@ -1983,6 +2069,7 @@ function FiiRadarTable({ items, onSelect }: { items: Array<{ asset: Asset; analy
 function ClientPlanSection({ user, plans, payments, upgradeResource = null }: { user: Account; plans: Plan[]; payments: Payment[]; upgradeResource?: "comparador" | "radar" | null }) {
   const plan = plans.find((item) => item.id === user.planId);
   const free = isFreePlan(user.planId, plan?.name);
+  const freeBenefits = getFreePlanBenefits(plan);
   const lastPayment = [...payments].filter((payment) => payment.clientId === user.id).sort((a, b) => b.paymentDate.localeCompare(a.paymentDate))[0];
   const days = calcularDiasRestantes(user.dueDate ?? todayIso());
   const status = planVisualStatus(user);
@@ -1997,12 +2084,12 @@ function ClientPlanSection({ user, plans, payments, upgradeResource = null }: { 
     {upgradeResource && <UpgradeNotice title={`${lockedName} disponível nos planos pagos`} description={lockedDescription} onUpgrade={() => document.getElementById("upgrade-planos")?.scrollIntoView({ behavior: "smooth", block: "start" })} />}
     <div className="mt-6 grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
       <PremiumCard title="Plano atual" description="Valor contratado e validade do acesso." icon={WalletCards}>
-        <div className="grid gap-3 sm:grid-cols-2"><InfoTile label="Plano" value={plan?.name ?? "Sem plano"} /><InfoTile label="Valor" value={money.format(user.planValue ?? plan?.value ?? 0)} /><InfoTile label="Início" value={user.planStartedAt ? new Date(user.planStartedAt).toLocaleDateString("pt-BR") : "-"} /><InfoTile label="Vencimento" value={user.dueDate ? new Date(user.dueDate).toLocaleDateString("pt-BR") : "-"} /><InfoTile label="Duração" value={free ? "Sem cobrança" : `${plan?.durationDays ?? 0} dias`} /><InfoTile label="Dias restantes" value={free ? "Acesso gratuito" : `${days} dias`} /><InfoTile label="Status" value={status.label} /><InfoTile label="Último pagamento" value={lastPayment ? money.format(lastPayment.value) : "-"} /></div>
+        <div className="grid gap-3 sm:grid-cols-2"><InfoTile label="Plano" value={free ? freePlanDisplayName(plan?.name) : plan?.name ?? "Sem plano"} /><InfoTile label="Valor" value={money.format(user.planValue ?? plan?.value ?? 0)} /><InfoTile label="Início" value={user.planStartedAt ? new Date(user.planStartedAt).toLocaleDateString("pt-BR") : "-"} /><InfoTile label="Vencimento" value={free ? "Sem vencimento" : user.dueDate ? new Date(user.dueDate).toLocaleDateString("pt-BR") : "-"} /><InfoTile label="Duração" value={free ? "Sem prazo de expiração" : `${plan?.durationDays ?? 0} dias`} /><InfoTile label="Dias restantes" value={free ? "Acesso gratuito" : `${days} dias`} /><InfoTile label="Renovação automática" value={free ? "Não se aplica" : "Conforme contratação"} /><InfoTile label="Status" value={status.label} /><InfoTile label="Último pagamento" value={free ? "Não se aplica" : lastPayment ? money.format(lastPayment.value) : "-"} /></div>
         {alert && !free && <p className="mt-4 rounded-lg bg-amber-500/10 p-3 text-sm font-bold text-amber-700 dark:text-amber-300">{alert}</p>}
         <p className="mt-4 rounded-lg bg-slate-50 p-3 text-sm text-slate-600 dark:bg-white/5 dark:text-slate-300">{free ? "O Plano FREE mantém os recursos básicos e permite upgrade a qualquer momento." : status.detail}</p>
         <a href="mailto:alfatecinvestpro@gmail.com" className="mt-4 inline-flex rounded-md bg-cyan-600 px-5 py-3 font-bold text-white">Entrar em contato com o administrador</a>
       </PremiumCard>
-      {free ? <PremiumCard title="Benefícios do Plano FREE" description="Recursos básicos disponíveis na conta." icon={ShieldCheck}><div className="grid gap-2 sm:grid-cols-2">{["Consulta básica ao mercado", `Até ${FREE_PORTFOLIO_LIMIT} ativos na carteira`, "Top 10 oportunidades", "Relatório resumido em PDF", "3 notificações por dia"].map((item) => <p key={item} className="rounded-md bg-emerald-500/10 p-3 text-sm font-bold text-emerald-700 dark:text-emerald-300">Liberado - {item}</p>)}{["Comparador Inteligente", "Radar IA", "Balanceamento inteligente", "Métodos completos", "Relatórios avançados"].map((item) => <p key={item} className="rounded-md bg-slate-100 p-3 text-sm font-bold text-slate-600 dark:bg-white/5 dark:text-slate-300">Bloqueado - {item}</p>)}</div></PremiumCard> : <PremiumCard title="Menus liberados" description="Recursos disponíveis conforme plano e permissões do cliente." icon={ShieldCheck}><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{clientModules.map((module) => <div key={module.id} className={cls("rounded-md p-3 text-sm font-bold", user.permissions.includes(module.id) ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "bg-slate-100 text-slate-500 dark:bg-white/5 dark:text-slate-400")}>{user.permissions.includes(module.id) ? "Liberado" : "Bloqueado"} - {module.label}</div>)}</div></PremiumCard>}
+      {free ? <PremiumCard title="Benefícios do Plano FREE" description="Recursos básicos disponíveis na conta." icon={ShieldCheck}><div className="grid gap-2 sm:grid-cols-2">{freeBenefits.map((item) => <p key={item} className="rounded-md bg-emerald-500/10 p-3 text-sm font-bold text-emerald-700 dark:text-emerald-300">Liberado - {item}</p>)}{freePlanLockedFeatures.map((item) => <p key={item} className="rounded-md bg-slate-100 p-3 text-sm font-bold text-slate-600 dark:bg-white/5 dark:text-slate-300">Bloqueado - {item}</p>)}</div></PremiumCard> : <PremiumCard title="Menus liberados" description="Recursos disponíveis conforme plano e permissões do cliente." icon={ShieldCheck}><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{clientModules.map((module) => <div key={module.id} className={cls("rounded-md p-3 text-sm font-bold", user.permissions.includes(module.id) ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "bg-slate-100 text-slate-500 dark:bg-white/5 dark:text-slate-400")}>{user.permissions.includes(module.id) ? "Liberado" : "Bloqueado"} - {module.label}</div>)}</div></PremiumCard>}
     </div>
     <div id="upgrade-planos" className="mt-6 scroll-mt-24"><h3 className="mb-4 text-xl font-black">{free ? "Fazer upgrade" : "Assinar ou renovar plano"}</h3><MercadoPagoLinkCheckout plans={paidPlans} currentPlanId={free ? undefined : user.planId} userName={user.name} userEmail={user.email} /></div>
   </Section>;
@@ -2066,9 +2153,11 @@ function StatusPill({ status }: { status: ClientStatus | PaymentStatus }) {
 }
 function PlanCard({ plan, setPlans, setAccounts }: { plan: Plan; setPlans: React.Dispatch<React.SetStateAction<Plan[]>>; setAccounts: React.Dispatch<React.SetStateAction<Account[]>> }) {
   const [draft, setDraft] = useState<Plan>(plan);
+  const free = isFreePlan(plan.id, plan.name);
+  const freeLimits = getFreePlanLimits(draft);
   const [saved, setSaved] = useState(false);
   const hasChanges = JSON.stringify(draft) !== JSON.stringify(plan);
-  const canSave = draft.value >= 0 && draft.durationDays > 0;
+  const canSave = (free ? draft.value === 0 : draft.value >= 0) && draft.durationDays > 0;
 
   useEffect(() => {
     setDraft(plan);
@@ -2088,10 +2177,11 @@ function PlanCard({ plan, setPlans, setAccounts }: { plan: Plan; setPlans: React
   }
 
   return (
-    <PremiumCard title={plan.name} description={`${draft.durationDays} dias de acesso`} icon={ShieldCheck}>
+    <PremiumCard title={free ? freePlanDisplayName(plan.name) : plan.name} description={free ? "Sem cobrança e sem vencimento" : `${draft.durationDays} dias de acesso`} icon={ShieldCheck}>
       <div className="space-y-3">
-        <Input label="Valor" type="number" step="0.01" min="0" value={draft.value} onChange={(e) => updateDraft({ value: Number(e.target.value) })} />
-        <Input label="Duração em dias" type="number" min="1" value={draft.durationDays} onChange={(e) => updateDraft({ durationDays: Number(e.target.value) })} />
+        <Input label="Valor" type="number" step="0.01" min="0" value={free ? 0 : draft.value} disabled={free} onChange={(e) => updateDraft({ value: Number(e.target.value) })} />
+        <Input label="Duração em dias" type="number" min="1" value={draft.durationDays} disabled={free} onChange={(e) => updateDraft({ durationDays: Number(e.target.value) })} />
+        {free && <div className="space-y-3 rounded-xl bg-emerald-500/10 p-3"><p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">O plano gratuito permanece em R$ 0,00 e sem vencimento. Status, limites e permissões podem ser administrados abaixo.</p><div className="grid gap-3 sm:grid-cols-3"><Input label="Limite da carteira" type="number" min="1" value={freeLimits.portfolio} onChange={(event) => updateDraft({ limits: { ...freeLimits, portfolio: Math.max(1, Number(event.target.value)) } })} /><Input label="Oportunidades por dia" type="number" min="1" value={freeLimits.opportunities} onChange={(event) => updateDraft({ limits: { ...freeLimits, opportunities: Math.max(1, Number(event.target.value)) } })} /><Input label="Notificações por dia" type="number" min="1" value={freeLimits.notifications} onChange={(event) => updateDraft({ limits: { ...freeLimits, notifications: Math.max(1, Number(event.target.value)) } })} /></div></div>}
         <Select label="Status" value={draft.status} onChange={(e) => updateDraft({ status: e.target.value as "ativo" | "inativo" })}>
           <option value="ativo">Ativo</option>
           <option value="inativo">Inativo</option>

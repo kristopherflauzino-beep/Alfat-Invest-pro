@@ -2,7 +2,7 @@
 
 import { Check, Eye, EyeOff, MailCheck, ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { isFreePlan } from "@/lib/plans/access";
+import { freePlanDisplayName, freePlanLockedFeatures, getFreePlanBenefits, isFreePlan, type FreePlanLimits } from "@/lib/plans/access";
 
 export type PublicRegistrationPayload = {
   name: string;
@@ -24,7 +24,7 @@ export type PublicRegistrationResult = {
   emailStatus?: string;
 };
 
-type Plan = { id: string; name: string; value: number; durationDays: number; status: string; permissions: string[] };
+type Plan = { id: string; name: string; value: number; durationDays: number; status: string; permissions: string[]; limits?: FreePlanLimits };
 const brl = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 const stages = ["Dados", "Plano", "E-mail", "Pagamento", "Ativação"];
 
@@ -39,8 +39,15 @@ export function PendingRegistrationForm({
   databaseError: string;
   onRegister: (payload: PublicRegistrationPayload) => Promise<PublicRegistrationResult>;
 }) {
-  const activePlans = useMemo(() => plans.filter((plan) => plan.status === "ativo" && !isFreePlan(plan.id, plan.name) && plan.value > 0), [plans]);
+  const activePlans = useMemo(() => plans
+    .filter((plan) => plan.status === "ativo" && (isFreePlan(plan.id, plan.name) ? plan.value === 0 : plan.value > 0))
+    .sort((a, b) => Number(isFreePlan(b.id, b.name)) - Number(isFreePlan(a.id, a.name))),
+  [plans]
+  );
   const [planId, setPlanId] = useState(activePlans[0]?.id || "");
+  const selectedPlan = activePlans.find((plan) => plan.id === planId);
+  const selectedFree = isFreePlan(selectedPlan?.id, selectedPlan?.name);
+  const selectedFreeBenefits = getFreePlanBenefits(selectedPlan);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -110,12 +117,12 @@ export function PendingRegistrationForm({
   if (submitted) {
     return (
       <div className="grid gap-5">
-        <Progress activeSteps={3} />
+        <Progress activeSteps={3} free={selectedFree} />
         <div className="rounded-3xl border border-cyan-400/40 bg-cyan-500/10 p-5">
           <MailCheck className="h-8 w-8 text-cyan-600 dark:text-cyan-300" />
           <h2 className="mt-3 text-xl font-black">Verifique seu e-mail</h2>
           <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-            Enviamos a confirmação para <strong>{registrationEmail}</strong>. Sua conta já existe, mas permanece sem acesso até a confirmação do e-mail e do pagamento.
+            Enviamos a confirmação para <strong>{registrationEmail}</strong>. {selectedFree ? "A conta gratuita será ativada automaticamente depois que o endereço for confirmado." : "A conta permanece sem acesso até a confirmação do e-mail e do pagamento."}
           </p>
         </div>
         {message && <p className="rounded-2xl bg-slate-100 p-4 text-sm font-semibold text-slate-700 dark:bg-white/5 dark:text-slate-200">{message}</p>}
@@ -130,7 +137,7 @@ export function PendingRegistrationForm({
 
   return (
     <form onSubmit={submit} className="grid gap-4">
-      <Progress activeSteps={2} />
+      <Progress activeSteps={2} free={selectedFree} />
       <div className="grid gap-3 sm:grid-cols-2">
         <Field name="name" label="Nome completo" placeholder="Seu nome completo" autoComplete="name" required />
         <Field name="username" label="Nome de usuário" placeholder="seu.usuario" autoComplete="username" required />
@@ -154,18 +161,31 @@ export function PendingRegistrationForm({
 
       <fieldset>
         <legend className="mb-2 text-xs font-black uppercase tracking-[0.16em] text-slate-500 dark:text-slate-300">Escolha do plano</legend>
-        <div className="grid gap-2 sm:grid-cols-3">
-          {activePlans.map((plan, index) => (
-            <label key={plan.id} className={"min-w-0 cursor-pointer rounded-2xl border p-3 " + (planId === plan.id ? "border-cyan-500 bg-cyan-500/10" : "border-slate-200 dark:border-white/10")}>
-              <input className="sr-only" type="radio" name="planId" value={plan.id} checked={planId === plan.id} onChange={() => setPlanId(plan.id)} />
-              <span className="block font-black">{plan.name}</span>
-              <span className="mt-1 block text-lg font-black">{brl.format(plan.value)}</span>
-              <span className="block text-xs text-slate-500 dark:text-slate-300">{plan.durationDays} dias</span>
-              {index === 1 && <span className="mt-2 inline-block rounded-full bg-cyan-500 px-2 py-1 text-[10px] font-black text-white">Mais escolhido</span>}
-              {index === activePlans.length - 1 && <span className="mt-2 inline-block rounded-full bg-emerald-500 px-2 py-1 text-[10px] font-black text-white">Melhor custo-benefício</span>}
-            </label>
-          ))}
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          {activePlans.map((plan) => {
+            const free = isFreePlan(plan.id, plan.name);
+            return (
+              <label key={plan.id} className={"min-w-0 cursor-pointer rounded-2xl border p-3 " + (planId === plan.id ? "border-cyan-500 bg-cyan-500/10 ring-2 ring-cyan-500/20" : "border-slate-200 dark:border-white/10")}>
+                <input className="sr-only" type="radio" name="planId" value={plan.id} checked={planId === plan.id} onChange={() => setPlanId(plan.id)} />
+                <span className="block font-black">{freePlanDisplayName(plan.name)}</span>
+                <span className="mt-1 block text-lg font-black">{brl.format(plan.value)}</span>
+                <span className="block text-xs text-slate-500 dark:text-slate-300">{free ? "Sem cobrança" : plan.durationDays + " dias de acesso"}</span>
+                {free && <span className="mt-2 inline-block rounded-full bg-emerald-500 px-2 py-1 text-[10px] font-black text-white">Sem cartão de crédito</span>}
+                {free && <ul className="mt-3 space-y-1 text-[11px] text-slate-600 dark:text-slate-300">
+                  {getFreePlanBenefits(plan).slice(0, 3).map((benefit) => <li key={benefit}>✓ {benefit}</li>)}
+                </ul>}
+                {!free && plan.id === "mensal" && <span className="mt-2 inline-block rounded-full bg-cyan-500 px-2 py-1 text-[10px] font-black text-white">Mais escolhido</span>}
+                {!free && plan.id === "anual" && <span className="mt-2 inline-block rounded-full bg-emerald-500 px-2 py-1 text-[10px] font-black text-white">Melhor custo-benefício</span>}
+              </label>
+            );
+          })}
         </div>
+        {selectedFree && <div className="mt-3 rounded-2xl border border-emerald-300 bg-emerald-500/10 p-4 text-xs dark:border-emerald-400/30">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div><strong className="text-emerald-800 dark:text-emerald-200">Recursos incluídos</strong>{selectedFreeBenefits.map((item) => <p key={item} className="mt-1 text-slate-600 dark:text-slate-300">✓ {item}</p>)}</div>
+            <div><strong className="text-slate-700 dark:text-slate-200">Disponíveis no upgrade</strong>{freePlanLockedFeatures.map((item) => <p key={item} className="mt-1 text-slate-500 dark:text-slate-400">Bloqueado · {item}</p>)}</div>
+          </div>
+        </div>}
       </fieldset>
 
       <label className="flex items-start gap-3 text-xs"><input name="acceptTerms" type="checkbox" required className="mt-0.5 h-4 w-4" /><span>Aceito os Termos de Uso.</span></label>
@@ -174,21 +194,22 @@ export function PendingRegistrationForm({
 
       <div className="rounded-2xl bg-blue-500/10 p-3 text-xs leading-5 text-blue-800 dark:text-blue-200">
         <ShieldCheck className="mr-2 inline h-4 w-4" />
-        A conta será criada sem acesso. A liberação ocorrerá somente após a confirmação do e-mail e do pagamento.
+        {selectedFree ? "O Plano Gratuito não exige cartão nem cobrança. O acesso será liberado após a confirmação do e-mail." : "A conta será criada sem acesso. A liberação ocorrerá somente após a confirmação do e-mail e do pagamento."}
       </div>
       {message && <div className="rounded-2xl bg-cyan-500/10 p-4 text-sm font-semibold text-cyan-800 dark:text-cyan-200"><MailCheck className="mr-2 inline h-5 w-5" />{message}</div>}
       {databaseError && <div className="rounded-2xl bg-amber-500/10 p-4 text-sm font-semibold text-amber-800 dark:text-amber-200">{databaseError}</div>}
       <button disabled={loading || Boolean(databaseError) || activePlans.length === 0 || !planId} className="min-h-12 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 px-5 font-black text-white disabled:opacity-50">
-        {loading ? "Criando conta..." : "Criar conta e confirmar e-mail"}
+        {loading ? "Criando conta..." : selectedFree ? "Criar conta gratuita" : "Criar conta e confirmar e-mail"}
       </button>
     </form>
   );
 }
 
-function Progress({ activeSteps }: { activeSteps: number }) {
+function Progress({ activeSteps, free = false }: { activeSteps: number; free?: boolean }) {
+  const visibleStages = free ? stages.filter((stage) => stage !== "Pagamento") : stages;
   return (
-    <ol className="grid grid-cols-5 gap-1" aria-label="Etapas do cadastro">
-      {stages.map((stage, index) => (
+    <ol className="grid gap-1" style={{ gridTemplateColumns: `repeat(${visibleStages.length}, minmax(0, 1fr))` }} aria-label="Etapas do cadastro">
+      {visibleStages.map((stage, index) => (
         <li key={stage} className={"min-w-0 rounded-xl px-0.5 py-2 text-center text-[9px] font-black sm:px-1 sm:text-xs " + (index < activeSteps ? "bg-cyan-500 text-white" : "bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300")}>
           <span className="block">{index + 1}</span>
           <span className="block break-words">{stage}</span>

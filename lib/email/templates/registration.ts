@@ -1,16 +1,20 @@
 import { emailLayout } from "./base";
 
-export function registrationConfirmationEmail(input: { name: string; confirmationUrl: string; planName: string }) {
+export function registrationConfirmationEmail(input: { name: string; confirmationUrl: string; planName: string; isFree?: boolean }) {
+  const nextStep = input.isFree
+    ? "Após a confirmação, sua conta gratuita será ativada sem cobrança e sem cartão de crédito."
+    : "Após a confirmação, você poderá prosseguir para o pagamento do plano " + input.planName + ".";
+  const textNextStep = input.isFree ? " A conta gratuita será ativada após a confirmação." : "";
   return {
     subject: "Confirme seu e-mail - AlfaTec Invest Pro",
-    text: "Olá, " + input.name + ". Confirme seu e-mail acessando " + input.confirmationUrl + ". O link é válido por 24 horas e pode ser usado uma única vez.",
+    text: "Olá, " + input.name + ". Confirme seu e-mail acessando " + input.confirmationUrl + ". O link é válido por 24 horas e pode ser usado uma única vez." + textNextStep,
     html: emailLayout({
       preheader: "Confirme o e-mail do seu cadastro.",
       title: "Confirme seu e-mail",
       greeting: "Olá, " + input.name + ".",
       paragraphs: [
         "Obrigado por iniciar seu cadastro no AlfaTec Invest Pro.",
-        "Para confirmar que este e-mail pertence a você, clique no botão abaixo. Depois da confirmação, você poderá prosseguir para o pagamento do plano " + input.planName + ".",
+        "Para confirmar que este e-mail pertence a você, clique no botão abaixo. " + nextStep,
         "Link alternativo: " + input.confirmationUrl
       ],
       actionLabel: "Confirmar meu e-mail",
@@ -20,6 +24,29 @@ export function registrationConfirmationEmail(input: { name: string; confirmatio
   };
 }
 
+
+export function freeAccountActivatedEmail(input: { name: string; appUrl: string }) {
+  return {
+    subject: "Sua conta gratuita foi ativada - AlfaTec Invest Pro",
+    text: "Olá, " + input.name + ". Seu e-mail foi confirmado e sua conta gratuita está ativa. Acesse " + input.appUrl,
+    html: emailLayout({
+      preheader: "Seu acesso gratuito ao AlfaTec Invest Pro está ativo.",
+      title: "Conta gratuita ativada",
+      greeting: "Olá, " + input.name + ".",
+      paragraphs: [
+        "Seu e-mail foi confirmado e sua conta gratuita está pronta para uso.",
+        "Nenhum pagamento ou cartão de crédito é necessário. Você poderá fazer upgrade a qualquer momento."
+      ],
+      details: [
+        { label: "Plano", value: "Plano Gratuito" },
+        { label: "Valor", value: "R$ 0,00" },
+        { label: "Cobrança", value: "Não se aplica" }
+      ],
+      actionLabel: "Entrar na plataforma",
+      actionUrl: input.appUrl
+    })
+  };
+}
 export function emailVerifiedAwaitingPaymentEmail(input: { name: string; planName: string; continuationUrl: string }) {
   return {
     subject: "E-mail confirmado - AlfaTec Invest Pro",

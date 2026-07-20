@@ -15,6 +15,7 @@ import {
 import { sendEmail } from "@/lib/email/email-service";
 import { registrationConfirmationEmail } from "@/lib/email/templates/registration";
 import { officialAppUrl } from "@/lib/email/templates/base";
+import { isFreePlan } from "@/lib/plans/access";
 import { readCoreState, writeCoreState } from "@/lib/server/core-state";
 import { assertSameOrigin, requestErrorResponse } from "@/lib/server/request-security";
 
@@ -90,7 +91,7 @@ export async function POST(request: Request) {
     await writeCoreState(state);
 
     const confirmationUrl = officialAppUrl() + "/confirmar-email?token=" + encodeURIComponent(generated.token);
-    const template = registrationConfirmationEmail({ name: registration.name, confirmationUrl, planName: registration.planName });
+    const template = registrationConfirmationEmail({ name: registration.name, confirmationUrl, planName: registration.planName, isFree: isFreePlan(registration.planId, registration.planName) });
     await sendEmail({
       to: registration.email,
       ...template,
