@@ -2,8 +2,9 @@
 
 import { AlertTriangle, Building2, Calculator, CalendarDays, Download, Landmark, Pencil, Plus, RefreshCw, Save, ShieldCheck, Trash2, WalletCards, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { calculateFixedIncome, calculateInvestmentPosition, daysUntil } from "@/lib/fixed-income/calculator";
-import { fixedIncomeIndexers, fixedIncomeTypes, type FixedIncomeCalculationInput, type FixedIncomeInvestment, type FixedIncomeReferenceRates } from "@/lib/fixed-income/types";
+import { calculateInvestmentPosition, daysUntil, parseBrazilianCurrencyToCents } from "@/lib/fixed-income/calculator";
+import { fixedIncomeIndexers, fixedIncomeTypes, type FixedIncomeInvestment, type FixedIncomeReferenceRates } from "@/lib/fixed-income/types";
+import { FixedIncomeCalculator } from "@/components/fixed-income/FixedIncomeCalculator";
 
 type Tab = "overview" | "investments" | "calculator";
 const tabs: Array<{ id: Tab; label: string }> = [{ id: "overview", label: "Visão geral" }, { id: "investments", label: "Meus investimentos" }, { id: "calculator", label: "Calculadora" }];
@@ -13,7 +14,7 @@ const card = "rounded-lg border border-slate-200 bg-white p-5 dark:border-white/
 const inputClass = "mt-1 h-11 w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 text-slate-950 outline-none focus:border-cyan-500 dark:border-white/10 dark:bg-[#020817] dark:text-slate-50";
 const today = () => new Date().toISOString().slice(0, 10);
 const future = (days: number) => { const value = new Date(); value.setDate(value.getDate() + days); return value.toISOString().slice(0, 10); };
-const centsFromInput = (value: string) => Math.round(Number(value.replace(/./g, "").replace(",", ".")) * 100);
+const centsFromInput = (value: string) => parseBrazilianCurrencyToCents(value) ?? 0;
 const moneyFromCents = (value: number) => brl.format(value / 100);
 const fieldNumber = (value: string) => { const parsed = Number(value.replace(",", ".")); return Number.isFinite(parsed) ? parsed : 0; };
 
@@ -199,39 +200,6 @@ function InvestmentForm({ form, setField, onSubmit, saving, editing, onCancel }:
 
 function InvestmentTable({ positions, onEdit, onDelete }: { positions: Array<{ investment: FixedIncomeInvestment; result: ReturnType<typeof calculateInvestmentPosition> }>; onEdit: (item: FixedIncomeInvestment) => void; onDelete: (id: string) => void }) {
   return <div className={card + " min-w-0 overflow-hidden"}><h3 className="font-black">Posições de renda fixa</h3><div className="mt-4 overflow-x-auto"><table className="w-full min-w-[920px] text-sm"><thead><tr className="text-left text-slate-500 dark:text-slate-300"><th className="p-2">Produto</th><th className="p-2">Instituição</th><th className="p-2">Aplicado</th><th className="p-2">Líquido estimado</th><th className="p-2">Rentabilidade</th><th className="p-2">Indexador</th><th className="p-2">Vencimento</th><th className="p-2">Base</th><th className="p-2">Ações</th></tr></thead><tbody>{positions.map(({ investment, result }) => <tr key={investment.id} className="border-t border-slate-100 dark:border-white/10"><td className="p-2"><strong>{investment.name}</strong><small className="block text-slate-500">{typeLabel(investment.type)}</small></td><td className="p-2">{investment.institution || "Não informada"}<small className="block text-slate-500">{investment.broker || "Sem corretora"}</small></td><td className="p-2">{moneyFromCents(investment.principalInCents)}</td><td className="p-2 font-bold">{moneyFromCents(result?.displayValueInCents ?? investment.principalInCents)}</td><td className="p-2">{result ? `${pct.format(result.netReturnPercent)}%` : "Dados insuficientes"}</td><td className="p-2">{investment.indexer}{investment.indexerPercentage ? ` ${pct.format(investment.indexerPercentage)}%` : ""}</td><td className="p-2">{investment.maturityDate ? new Date(investment.maturityDate + "T12:00:00").toLocaleDateString("pt-BR") : "Sem vencimento"}</td><td className="p-2">{result?.valueBasis === "mercado" ? "Mercado" : "Curva"}</td><td className="p-2"><div className="flex gap-1"><button type="button" onClick={() => onEdit(investment)} className="rounded-md bg-cyan-500/10 p-2 text-cyan-700 dark:text-cyan-300" aria-label={`Editar ${investment.name}`}><Pencil className="h-4 w-4" /></button><button type="button" onClick={() => onDelete(investment.id)} className="rounded-md bg-red-500/10 p-2 text-red-700 dark:text-red-300" aria-label={`Excluir ${investment.name}`}><Trash2 className="h-4 w-4" /></button></div></td></tr>)}</tbody></table>{!positions.length && <p className="p-4 text-sm text-slate-500">Nenhum investimento cadastrado.</p>}</div></div>;
-}
-
-function FixedIncomeCalculator({ rates }: { rates: FixedIncomeReferenceRates | null }) {
-  const [input, setInput] = useState({ principal: "10000", monthly: "0", startDate: today(), endDate: future(365), indexer: "CDI", percentage: "100", fixed: "0", inflation: String(rates?.ipca.annualPercent ?? 0), taxExempt: false, iof: true, custody: "0", brokerage: "0" });
-  useEffect(() => { if (rates?.ipca.annualPercent !== undefined) setInput((current) => ({ ...current, inflation: String(rates.ipca.annualPercent) })); }, [rates?.ipca.annualPercent]);
-  const calculationInput: FixedIncomeCalculationInput = {
-    principalInCents: centsFromInput(input.principal), monthlyContributionInCents: centsFromInput(input.monthly),
-    startDate: input.startDate, endDate: input.endDate, indexer: input.indexer as FixedIncomeCalculationInput["indexer"],
-    indexerPercentage: fieldNumber(input.percentage), fixedRateAnnual: fieldNumber(input.fixed),
-    cdiAnnual: rates?.cdi.annualPercent, selicAnnual: rates?.selic.annualPercent,
-    inflationAnnual: fieldNumber(input.inflation), taxExempt: input.taxExempt, iofApplicable: input.iof,
-    custodyFeeAnnual: fieldNumber(input.custody), brokerageFeeInCents: centsFromInput(input.brokerage)
-  };
-  const unavailableReference = (input.indexer === "CDI" && rates?.cdi.annualPercent === undefined) || (input.indexer === "SELIC" && rates?.selic.annualPercent === undefined);
-  const result = unavailableReference ? null : calculateFixedIncome(calculationInput);
-  const update = (key: keyof typeof input, value: string | boolean) => setInput((current) => ({ ...current, [key]: value }));
-  return <div className="grid gap-5 lg:grid-cols-[0.8fr_1.2fr]">
-    <div className={card}><h3 className="font-black">Simular renda fixa</h3><div className="mt-4 grid gap-3 sm:grid-cols-2">
-      <TextField label="Valor inicial (R$)" value={input.principal} onChange={(value) => update("principal", value)} />
-      <TextField label="Aporte mensal (R$)" value={input.monthly} onChange={(value) => update("monthly", value)} />
-      <TextField label="Data inicial" value={input.startDate} onChange={(value) => update("startDate", value)} type="date" />
-      <TextField label="Data final" value={input.endDate} onChange={(value) => update("endDate", value)} type="date" />
-      <SelectField label="Indexador" value={input.indexer} onChange={(value) => update("indexer", value)} options={fixedIncomeIndexers.map((value) => [value, value])} />
-      <TextField label="% do indexador" value={input.percentage} onChange={(value) => update("percentage", value)} type="number" step="0.01" />
-      <TextField label="Taxa fixa/real (% a.a.)" value={input.fixed} onChange={(value) => update("fixed", value)} type="number" step="0.01" />
-      <TextField label="Inflação do cenário (% a.a.)" value={input.inflation} onChange={(value) => update("inflation", value)} type="number" step="0.01" />
-      <TextField label="Custódia (% a.a.)" value={input.custody} onChange={(value) => update("custody", value)} type="number" step="0.01" />
-      <TextField label="Taxa fixa (R$)" value={input.brokerage} onChange={(value) => update("brokerage", value)} />
-    </div><div className="mt-3 flex flex-wrap gap-4"><CheckField label="Isento de IR" checked={input.taxExempt} onChange={(value) => update("taxExempt", value)} /><CheckField label="IOF aplicável" checked={input.iof} onChange={(value) => update("iof", value)} /></div></div>
-    <div className={card}><h3 className="font-black">Resultado na curva</h3>{result ? <><div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{[["Total aplicado", result.investedInCents],["Valor bruto", result.grossValueInCents],["Rendimento bruto", result.grossIncomeInCents],["IR", -result.incomeTaxInCents],["IOF", -result.iofInCents],["Taxas", -result.feesInCents],["Rendimento líquido", result.netIncomeInCents],["Valor líquido final", result.netValueInCents]].map(([label, value]) => <div key={String(label)} className="rounded-md bg-slate-50 p-3 dark:bg-white/5"><small className="text-slate-500 dark:text-slate-300">{label}</small><strong className="mt-1 block">{moneyFromCents(Number(value))}</strong></div>)}</div>
-      <div className="mt-4 grid gap-3 sm:grid-cols-3"><Metric label="Rentabilidade líquida" value={`${pct.format(result.netReturnPercent)}%`} /><Metric label="Equivalente mensal" value={`${pct.format(result.effectiveMonthlyPercent)}%`} /><Metric label="Equivalente anual" value={`${pct.format(result.effectiveAnnualPercent)}%`} /><Metric label="Retorno real" value={result.realReturnPercent === null ? "Indisponível" : `${pct.format(result.realReturnPercent)}%`} /><Metric label="Alíquota IR" value={`${pct.format(result.incomeTaxRate)}%`} /><Metric label="Alíquota IOF" value={`${pct.format(result.iofRate)}%`} /></div>
-      <ul className="mt-4 space-y-2 text-xs text-amber-700 dark:text-amber-200">{result.warnings.map((warning) => <li key={warning}>• {warning}</li>)}</ul></> : <p className="mt-4 rounded-md bg-amber-500/10 p-4 text-sm text-amber-800 dark:text-amber-200">{unavailableReference ? "Taxa de referência indisponível. Atualize as taxas ou escolha outro indexador." : "Informe valores e datas válidos para calcular."}</p>}</div>
-  </div>;
 }
 
 function TextField({ label, value, onChange, type = "text", step, required, placeholder, inputMode }: { label: string; value: string; onChange: (value: string) => void; type?: string; step?: string; required?: boolean; placeholder?: string; inputMode?: "decimal" | "numeric" }) { return <label className="min-w-0 text-xs font-bold text-slate-600 dark:text-slate-300">{label}<input type={type} step={step} required={required} placeholder={placeholder} inputMode={inputMode} value={value} onChange={(event) => onChange(event.target.value)} className={inputClass} /></label>; }

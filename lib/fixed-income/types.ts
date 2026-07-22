@@ -59,6 +59,25 @@ export type FixedIncomeReferenceRates = {
   ipca: ReferenceRate;
 };
 
+export type FixedIncomeRateMode = "automatic" | "manual";
+export type FixedIncomeRateMethod = "percentage" | "spread";
+export type FixedIncomeDayCountBasis = 252 | 360 | 365;
+export type FixedIncomeContributionTiming = "end" | "beginning";
+
+export type FixedIncomeEvolutionPoint = {
+  period: number;
+  date: string;
+  investedInCents: number;
+  contributionInCents: number;
+  grossIncomeInCents: number;
+  incomeTaxInCents: number;
+  iofInCents: number;
+  custodyFeeInCents: number;
+  fixedFeesInCents: number;
+  grossBalanceInCents: number;
+  netBalanceInCents: number;
+};
+
 export type FixedIncomeCalculationInput = {
   principalInCents: number;
   monthlyContributionInCents?: number;
@@ -75,10 +94,17 @@ export type FixedIncomeCalculationInput = {
   iofApplicable?: boolean;
   custodyFeeAnnual?: number;
   brokerageFeeInCents?: number;
+  rateMode?: FixedIncomeRateMode;
+  manualReferenceAnnual?: number;
+  rateMethod?: FixedIncomeRateMethod;
+  dayCountBasis?: FixedIncomeDayCountBasis;
+  contributionTiming?: FixedIncomeContributionTiming;
+  productName?: string;
 };
 
 export type FixedIncomeCalculationResult = {
   days: number;
+  calculationDays: number;
   investedInCents: number;
   grossValueInCents: number;
   grossIncomeInCents: number;
@@ -87,6 +113,8 @@ export type FixedIncomeCalculationResult = {
   iofRate: number;
   iofInCents: number;
   feesInCents: number;
+  custodyFeeInCents: number;
+  fixedFeesInCents: number;
   netIncomeInCents: number;
   netValueInCents: number;
   grossReturnPercent: number;
@@ -95,7 +123,13 @@ export type FixedIncomeCalculationResult = {
   effectiveMonthlyPercent: number;
   effectiveAnnualPercent: number;
   annualRateUsed: number;
+  referenceAnnualPercent: number | null;
+  rateMode: FixedIncomeRateMode;
+  rateMethod: FixedIncomeRateMethod;
+  dayCountBasis: FixedIncomeDayCountBasis;
+  contributionCount: number;
   projection: boolean;
   marking: "curve";
   warnings: string[];
+  evolution: FixedIncomeEvolutionPoint[];
 };
