@@ -23,6 +23,7 @@ import {
   Gauge,
   KeyRound,
   LineChart as LineChartIcon,
+  Landmark,
   Lock,
   LogOut,
   MailCheck,
@@ -137,6 +138,9 @@ import { NotificationBell } from "@/components/notifications/NotificationBell";
 import { NotificationCenter } from "@/components/notifications/NotificationCenter";
 import { ReportCenter } from "@/components/reports/ReportCenter";
 import { EmailHealthPanel } from "@/components/admin/EmailHealthPanel";
+import { MarketDataHealthPanel } from "@/components/admin/MarketDataHealthPanel";
+import { FixedIncomeCenter } from "@/components/fixed-income/FixedIncomeCenter";
+import { IncomeEventsCard } from "@/components/assets/IncomeEventsCard";
 import { PendingRegistrationForm, type PublicRegistrationPayload, type PublicRegistrationResult } from "@/components/auth/PendingRegistrationForm";
 import { AdminPendingRegistrations } from "@/components/admin/AdminPendingRegistrations";
 import { AdminIdentityEditor } from "@/components/account/AdminIdentityEditor";
@@ -153,7 +157,7 @@ import { isFreeExplainerModule } from "@/lib/plans/access";
 type Role = "ADMIN" | "CLIENTE";
 type ClientStatus = "ativo" | "pendente" | "bloqueado" | "vencido";
 type PaymentStatus = "pago" | "pendente" | "vencido" | "cancelado";
-type ClientModuleId = "dashboard" | "mercado" | "oportunidades" | "comparador" | "carteira" | "alfatec_portfolio_method" | "radar" | "relatorios" | "graham_valuation" | "alfatec_fiis" | "alfatec_crypto_method" | "notificacoes" | "plano" | "configuracoes";
+type ClientModuleId = "dashboard" | "mercado" | "oportunidades" | "comparador" | "carteira" | "renda_fixa" | "alfatec_portfolio_method" | "radar" | "relatorios" | "graham_valuation" | "alfatec_fiis" | "alfatec_crypto_method" | "notificacoes" | "plano" | "configuracoes";
 type AdminModuleId = "admin-dashboard" | "clientes" | "planos" | "financeiro" | "admin-relatorios" | "configuracoes";
 type RangeId = "1D" | "5D" | "1M" | "6M" | "1A" | "5A" | "MAX";
 
@@ -178,6 +182,10 @@ type ExternalQuote = {
   updatedAt: string;
   consultedAt?: string;
   isCached?: boolean;
+  incomeEvents?: Asset["incomeEvents"];
+  incomeSummary?: Asset["incomeSummary"];
+  priceConfidence?: Asset["priceConfidence"];
+  validationMessages?: string[];
   history?: Asset["priceHistory"];
 };
 
@@ -258,13 +266,14 @@ type AppStatePayload = {
   auditLogs: AuditLog[];
 };
 
-const allClientModules: ClientModuleId[] = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "alfatec_portfolio_method", "radar", "relatorios", "graham_valuation", "alfatec_fiis", "alfatec_crypto_method", "notificacoes", "plano", "configuracoes"];
+const allClientModules: ClientModuleId[] = ["dashboard", "mercado", "oportunidades", "comparador", "carteira", "renda_fixa", "alfatec_portfolio_method", "radar", "relatorios", "graham_valuation", "alfatec_fiis", "alfatec_crypto_method", "notificacoes", "plano", "configuracoes"];
 const clientModules: Array<{ id: ClientModuleId; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: "dashboard", label: "Dashboard", icon: Gauge },
   { id: "mercado", label: "Mercado", icon: BarChart3 },
   { id: "oportunidades", label: "Oportunidades", icon: TrendingUp },
   { id: "comparador", label: "Comparador", icon: LineChartIcon },
   { id: "carteira", label: "Minha Carteira", icon: WalletCards },
+  { id: "renda_fixa", label: "Renda Fixa", icon: Landmark },
   { id: "alfatec_portfolio_method", label: "Análise e Balanceamento", icon: Target },
   { id: "radar", label: "Radar IA", icon: BrainCircuit },
   { id: "relatorios", label: "Relatórios", icon: FileSpreadsheet },
@@ -331,30 +340,16 @@ function metric(value?: number, suffix = "") {
   return `${number.format(Number(value.toFixed(value > 1000 ? 0 : 2)))}${suffix}`;
 }
 function dividendFrequency(asset: Asset) {
-  const dy = asset.metrics.dividendYield ?? 0;
-  if (dy <= 0 || asset.type === "CRIPTO") return "Sem recorrência";
-  if (asset.type === "FII") return "Mensal";
-  if (asset.type === "ETF") return "Semestral";
-  if (asset.type === "BDR") return "Trimestral";
-  if (asset.tags.includes("dividendos") || asset.tags.includes("renda") || asset.tags.includes("defensiva")) return "Trimestral";
-  return "Eventual";
-}
-function dividendPaymentsPerYear(asset: Asset) {
-  const frequency = dividendFrequency(asset);
-  if (frequency === "Mensal") return 12;
-  if (frequency === "Trimestral") return 4;
-  if (frequency === "Semestral") return 2;
-  return 1;
+  if (asset.type === "CRIPTO") return "Sem recorrência";
+  return asset.incomeSummary?.frequency ?? "Histórico indisponível";
 }
 function dividendPerShare(asset: Asset) {
-  const dy = asset.metrics.dividendYield ?? 0;
-  if (dy <= 0 || asset.type === "CRIPTO") return undefined;
-  return (asset.price * (dy / 100)) / dividendPaymentsPerYear(asset);
+  if (asset.type === "CRIPTO") return undefined;
+  return asset.incomeSummary?.latestAmountPerUnit;
 }
 function annualDividendPerShare(asset: Asset) {
-  const dy = asset.metrics.dividendYield ?? 0;
-  if (dy <= 0 || asset.type === "CRIPTO") return undefined;
-  return asset.price * (dy / 100);
+  if (asset.type === "CRIPTO" || !asset.incomeSummary || asset.incomeSummary.events12Months === 0) return undefined;
+  return asset.incomeSummary.total12Months;
 }
 function comparisonScore(asset: Asset, rangeReturn: number, weights: RadarWeights) {
   const radar = calculateAssetScore(asset, weights);
@@ -643,9 +638,13 @@ function quoteToAsset(quote: ExternalQuote, previousAsset?: Asset): Asset {
     previousClose: quote.previousClose,
     open: quote.open,
     dayHigh: quote.dayHigh,
-    dayLow: quote.dayLow
+    dayLow: quote.dayLow,
+    incomeEvents: quote.incomeEvents,
+    incomeSummary: quote.incomeSummary,
+    priceConfidence: quote.priceConfidence,
+    validationMessages: quote.validationMessages
   };
-  asset.score = calculateAssetScore(asset);
+  asset.score = quote.priceConfidence === "low" || quote.priceConfidence === "insufficient" ? (previousAsset?.score ?? base.score) : calculateAssetScore(asset);
   return asset;
 }
 
@@ -923,7 +922,6 @@ export default function AlfatecInvestPro() {
     return () => window.removeEventListener("alfatec:open-reports", openReports);
   }, [currentUser?.role, isFreeUser]);
   useEffect(() => setGrahamY(grahamSettings.defaultY), [grahamSettings.defaultY]);
-  useEffect(() => { extraAssets.filter((asset) => asset.source === "external").forEach((asset) => window.localStorage.setItem("alfatec-quote-" + asset.ticker, JSON.stringify(asset))); }, [extraAssets]);
   async function refreshTicker(tickerInput: string, options: { select?: boolean; silent?: boolean; signal?: AbortSignal } = {}) {
     const clean = normalizeTicker(tickerInput);
     if (!isTickerLike(clean)) return null;
@@ -943,15 +941,13 @@ export default function AlfatecInvestPro() {
       return asset;
     } catch (error) {
       if (options.signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) return null;
-      const cached = window.localStorage.getItem("alfatec-quote-" + clean);
-      if (cached) { const asset = JSON.parse(cached) as Asset; setExtraAssets((current) => [asset, ...current.filter((item) => item.ticker !== asset.ticker)]); if (!options.silent) { setMarketQuoteStatus("error"); setMarketQuoteMessage("Fonte indisponível. Último dado disponível em cache."); } return asset; }
       if (!options.silent) { setMarketQuoteStatus("error"); setMarketQuoteMessage(error instanceof Error ? error.message : "Dado indisponível"); }
       return null;
     }
   }
 
   async function refreshVisibleMarket(options: { silent?: boolean } = {}) {
-    const tickers = Array.from(new Set([selectedAsset.ticker, ...portfolio.map((item) => item.ticker), ...marketResults.slice(0, 8).map((asset) => asset.ticker)])).slice(0, 16);
+    const tickers = Array.from(new Set([selectedAsset.ticker, assetA.ticker, assetB.ticker, grahamAsset.ticker, fiiAsset.ticker, ...portfolio.map((item) => item.ticker), ...marketResults.slice(0, 20).map((asset) => asset.ticker)])).slice(0, 24);
     setRefreshingMarket(true);
     await Promise.all(tickers.map((ticker) => refreshTicker(ticker, { silent: options.silent })));
     setRefreshingMarket(false);
@@ -1560,6 +1556,7 @@ export default function AlfatecInvestPro() {
         {clientModule === "alfatec_fiis" && (isFreeUser ? <FreeMethodExplanation method="Método AlfaTec FIIs" description="O método combina qualidade, renda, risco, valuation, gestão, liquidez e diversificação conforme o tipo de fundo. Scores e cálculos completos estão disponíveis nos planos pagos." onUpgrade={() => setClientModule("plano")} /> : <AlfatecFiiSection assets={assets} selectedAsset={fiiAsset} search={fiiSearch} setSearch={setFiiSearch} setSelectedAsset={setFiiAsset} currentUser={currentUser} settings={fiiSettings} saveSettings={saveFiiSettings} filters={fiiFilters} setFilters={setFiiFilters} segments={fiiSegments} opportunities={fiiOpportunityAnalyses} />)}
 
         {clientModule === "alfatec_portfolio_method" && (isFreeUser ? <FreeMethodExplanation method="Análise e Balanceamento" description="O Método AlfaTec Carteira organiza o perfil do investidor, a alocação-alvo e os critérios de diversificação e rebalanceamento. No Plano Free, a explicação permanece disponível, mas questionário, cálculos, simulações, histórico e sugestões de balanceamento ficam bloqueados." onUpgrade={() => setClientModule("plano")} /> : <AlfatecPortfolioMethod lines={portfolioAnalysis.lines} userId={currentUser.id} />)}
+        {clientModule === "renda_fixa" && <FixedIncomeCenter />}
         {clientModule === "alfatec_crypto_method" && (isFreeUser ? <FreeMethodExplanation method="Método AlfaTec Cripto" description="O método avalia fundamentos, rede, tokenomics, segurança, mercado, desenvolvimento, valuation on-chain e risco. Scores e análises completas estão disponíveis nos planos pagos." onUpgrade={() => setClientModule("plano")} /> : <AlfatecCryptoSection assets={assets} analyses={cryptoAnalyses} selectedTicker={cryptoTicker} loading={cryptoLoading} error={cryptoError} currentUserRole={currentUser.role} settings={cryptoSettings} onSelect={(ticker) => { setCryptoTicker(ticker); void loadCryptoData([ticker]); }} onRefresh={(ticker) => void loadCryptoData([ticker])} onSaveSettings={saveCryptoSettings} />)}
 
         {clientModule === "notificacoes" && <NotificationCenter />}
@@ -1936,6 +1933,7 @@ function AssetPanel({ asset, favorites, setFavorites, onAddToPortfolio, onOpenFi
       {asset.type === "CRIPTO" && <CryptoMiniSummary analysis={cryptoAnalysis ?? null} onOpen={() => onOpenCryptoAnalysis?.(asset)} />}
         </>
       )}
+      <IncomeEventsCard asset={asset} compact={basicMode} />
       <div className="mt-4 rounded-2xl bg-slate-50 p-3 text-xs text-slate-600 dark:bg-white/5 dark:text-slate-300">
         <strong>Consulta externa:</strong> Yahoo Finance. O destino de consulta pode ser diferente da fonte usada pela plataforma.
       </div>
@@ -2036,7 +2034,7 @@ function GrahamValuationSection({ assets, selectedAsset, search, setSearch, setS
   const canEdit = currentUser.role === "ADMIN" || settings.clientsCanEditGrowth || settings.clientsCanEditY;
   const warning = growth > settings.maxGrowth ? "Taxas elevadas de crescimento podem produzir resultados excessivamente otimistas." : undefined;
 
-  return <Section title="Valuation Graham" subtitle="Dois métodos de Benjamin Graham com fontes, datas, premissas e limitações visíveis." eyebrow="Valuation"><div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]"><div className="space-y-6"><PremiumCard title="Pesquisar ativo" description="Selecione uma ação para calcular os métodos." icon={Search}><SearchBox label="Ativo" value={search} onChange={setSearch} assets={assets} onSelect={(asset) => { setSelectedAsset(asset); setSearch(asset.ticker); }} /><div className="mt-4 grid gap-3 sm:grid-cols-2"><InfoTile label="Ativo" value={`${selectedAsset.ticker} - ${selectedAsset.name}`} /><InfoTile label="Última atualização" value={new Date(selectedAsset.lastUpdatedAt ?? selectedAsset.updatedAt).toLocaleString("pt-BR")} /><InfoTile label="Fonte" value={externalDataSourceLabel(selectedAsset.sourceLabel, selectedAsset.source)} /><InfoTile label="Tipo" value={typeLabels[selectedAsset.type]} /></div></PremiumCard>{currentUser.role === "ADMIN" && <PremiumCard title="Configuração administrativa" description="Parâmetros oficiais para Y, crescimento e score." icon={Settings}><div className="grid gap-3"><Input label="Y padrão (%)" type="number" step="0.1" value={settings.defaultY} onChange={(e) => saveSettings({ defaultY: Number(e.target.value) })} /><Input label="Crescimento mínimo (%)" type="number" value={settings.minGrowth} onChange={(e) => saveSettings({ minGrowth: Number(e.target.value) })} /><Input label="Crescimento máximo recomendado (%)" type="number" value={settings.maxGrowth} onChange={(e) => saveSettings({ maxGrowth: Number(e.target.value) })} /><Input label="Peso Graham no score" type="number" max="15" value={settings.scoreWeight} onChange={(e) => saveSettings({ scoreWeight: Math.min(15, Number(e.target.value)) })} /><Toggle label="Cálculo ativo" checked={settings.enabled} onChange={(value) => saveSettings({ enabled: value })} /><Toggle label="Cliente edita crescimento" checked={settings.clientsCanEditGrowth} onChange={(value) => saveSettings({ clientsCanEditGrowth: value })} /><Toggle label="Cliente edita Y" checked={settings.clientsCanEditY} onChange={(value) => saveSettings({ clientsCanEditY: value })} /></div><p className="mt-3 text-xs text-slate-500 dark:text-slate-400">Y exibido como parâmetro configurado pelo administrador quando não houver integração confiável para títulos corporativos AAA.</p></PremiumCard>}<GrahamExplanation /></div><div className="space-y-6"><GrahamNumberCard analysis={graham} /><GrahamGrowthCard price={selectedAsset.price} lpa={inputs.lpa} growth={growth} y={y} value={growthValue} potential={growthPotential} safetyMargin={growthMargin} sourceLabel={`Crescimento informado pelo usuário; Y: Parâmetro configurado pelo administrador`} updatedAt={new Date().toISOString()} scenarios={scenarios} warning={warning} canEdit={canEdit} onGrowthChange={(value) => settings.clientsCanEditGrowth || currentUser.role === "ADMIN" ? setGrowth(value) : undefined} onYChange={(value) => settings.clientsCanEditY || currentUser.role === "ADMIN" ? setY(value) : undefined} /></div></div></Section>;
+  return <Section title="Valuation Graham" subtitle="Dois métodos de Benjamin Graham com fontes, datas, premissas e limitações visíveis." eyebrow="Valuation"><div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]"><div className="space-y-6"><PremiumCard title="Pesquisar ativo" description="Selecione uma ação para calcular os métodos." icon={Search}><SearchBox label="Ativo" value={search} onChange={setSearch} assets={assets} onSelect={(asset) => { setSelectedAsset(asset); setSearch(asset.ticker); }} /><div className="mt-4 grid gap-3 sm:grid-cols-2"><InfoTile label="Ativo" value={`${selectedAsset.ticker} - ${selectedAsset.name}`} /><InfoTile label="Última atualização" value={new Date(selectedAsset.lastUpdatedAt ?? selectedAsset.updatedAt).toLocaleString("pt-BR")} /><InfoTile label="Fonte" value={externalDataSourceLabel(selectedAsset.sourceLabel, selectedAsset.source)} /><InfoTile label="Tipo" value={typeLabels[selectedAsset.type]} /></div></PremiumCard>{currentUser.role === "ADMIN" && <PremiumCard title="Configuração administrativa" description="Parâmetros oficiais para Y, crescimento e score." icon={Settings}><div className="grid gap-3"><Input label="Y padrão (%)" type="number" step="0.1" value={settings.defaultY} onChange={(e) => saveSettings({ defaultY: Number(e.target.value) })} /><Input label="Crescimento mínimo (%)" type="number" value={settings.minGrowth} onChange={(e) => saveSettings({ minGrowth: Number(e.target.value) })} /><Input label="Crescimento máximo recomendado (%)" type="number" value={settings.maxGrowth} onChange={(e) => saveSettings({ maxGrowth: Number(e.target.value) })} /><Input label="Peso Graham no score" type="number" max="15" value={settings.scoreWeight} onChange={(e) => saveSettings({ scoreWeight: Math.min(15, Number(e.target.value)) })} /><Toggle label="Cálculo ativo" checked={settings.enabled} onChange={(value) => saveSettings({ enabled: value })} /><Toggle label="Cliente edita crescimento" checked={settings.clientsCanEditGrowth} onChange={(value) => saveSettings({ clientsCanEditGrowth: value })} /><Toggle label="Cliente edita Y" checked={settings.clientsCanEditY} onChange={(value) => saveSettings({ clientsCanEditY: value })} /></div><p className="mt-3 text-xs text-slate-500 dark:text-slate-400">Y exibido como parâmetro configurado pelo administrador quando não houver integração confiável para títulos corporativos AAA.</p></PremiumCard>}<GrahamExplanation /></div><div className="space-y-6"><IncomeEventsCard asset={selectedAsset} /><GrahamNumberCard analysis={graham} /><GrahamGrowthCard price={selectedAsset.price} lpa={inputs.lpa} growth={growth} y={y} value={growthValue} potential={growthPotential} safetyMargin={growthMargin} sourceLabel={`Crescimento informado pelo usuário; Y: Parâmetro configurado pelo administrador`} updatedAt={new Date().toISOString()} scenarios={scenarios} warning={warning} canEdit={canEdit} onGrowthChange={(value) => settings.clientsCanEditGrowth || currentUser.role === "ADMIN" ? setGrowth(value) : undefined} onYChange={(value) => settings.clientsCanEditY || currentUser.role === "ADMIN" ? setY(value) : undefined} /></div></div></Section>;
 }
 
 
@@ -2050,7 +2048,7 @@ function AlfatecFiiSection({ assets, selectedAsset, search, setSearch, setSelect
     saveSettings({ weightsByKind: { ...settings.weightsByKind, [analysis.kind]: { ...kindWeights, [key]: value } } });
   }
 
-  return <Section title="Método AlfaTec FIIs" subtitle="Análise própria para fundos imobiliários, sem usar Graham, PEG ou P/L como método principal." eyebrow="Fundos imobiliários"><div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]"><div className="space-y-6"><PremiumCard title="Pesquisar FII" description="Selecione um fundo imobiliário real para analisar." icon={Search}><SearchBox label="Ticker ou nome do FII" value={search} onChange={setSearch} assets={fiiAssets} onSelect={(asset) => { setSelectedAsset(asset); setSearch(asset.ticker); }} /><div className="mt-4 grid gap-3 sm:grid-cols-2"><InfoTile label="Ativo" value={`${selectedAsset.ticker} - ${selectedAsset.name}`} /><InfoTile label="Tipo" value={analysis.kindLabel} /><InfoTile label="Última atualização" value={new Date(analysis.updatedAt).toLocaleString("pt-BR")} /><InfoTile label="Fonte do preço" value={analysis.price.source} /></div></PremiumCard><PremiumCard title="Entenda o método" description="Critérios, limitações e leitura correta da nota." icon={ShieldCheck}><div className="space-y-3 text-sm text-slate-600 dark:text-slate-300"><p>O Método AlfaTec FIIs combina indicadores financeiros, operacionais, patrimoniais e de risco. A ponderação muda conforme o tipo do fundo: tijolo, papel, híbrido, fundo de fundos, renda urbana, desenvolvimento, infraestrutura ou outro tipo compatível.</p><p>O método considera P/VP ajustado, Dividend Yield recorrente, prêmio de risco, liquidez, diversificação, risco do segmento, qualidade de dados e comparação com fundos semelhantes. P/VP abaixo de 1 e Dividend Yield alto nunca são usados isoladamente como oportunidade.</p><p className="rounded-2xl bg-amber-500/10 p-3 font-semibold text-amber-700 dark:text-amber-300">O Método AlfaTec FIIs é um modelo analítico próprio. A nota gerada não representa garantia de rendimento, valorização ou recomendação personalizada de investimento.</p></div></PremiumCard>{currentUser.role === "ADMIN" && <PremiumCard title="Configurações do Método AlfaTec FIIs" description="Pesos, taxa de referência e ativação do método." icon={Settings}><div className="grid gap-3"><Toggle label="Método ativo" checked={settings.enabled} onChange={(value) => saveSettings({ enabled: value })} /><Input label="Taxa de referência (%)" type="number" step="0.1" value={settings.referenceRate} onChange={(e) => saveSettings({ referenceRate: Number(e.target.value), referenceRateSource: "Parâmetro configurado pelo administrador" })} /><Input label="Fonte da taxa" value={settings.referenceRateSource} onChange={(e) => saveSettings({ referenceRateSource: e.target.value })} /><Select label="Confiança mínima" value={settings.minimumConfidence} onChange={(e) => saveSettings({ minimumConfidence: e.target.value as AlfatecFiiSettings["minimumConfidence"] })}><option value="Alta">Alta</option><option value="Media">Média</option><option value="Baixa">Baixa</option><option value="Insuficiente">Insuficiente</option></Select><div className="rounded-3xl bg-slate-50 p-4 dark:bg-white/5"><p className="mb-2 text-sm font-black">Pesos para {analysis.kindLabel}</p>{(Object.keys(kindWeights) as Array<keyof typeof kindWeights>).map((key) => <WeightSlider key={key} label={`${key} (${kindWeights[key]}%)`} value={kindWeights[key]} onChange={(value) => updateKindWeight(key, value)} />)}</div></div></PremiumCard>}</div><div className="space-y-6"><AlfatecFiiScoreCard analysis={analysis} /><FiiScoreBreakdown analysis={analysis} /><FiiSegmentComparison comparison={comparison} ticker={analysis.ticker} score={analysis.score} /><FiiDataSourceInfo analysis={analysis} /><PremiumCard title="Comparação com FIIs filtrados" description="Lista rápida com fundos compatíveis e filtros do método." icon={TrendingUp}><FiiOpportunityFilters value={filters} onChange={(patch) => setFilters((current) => ({ ...current, ...patch }))} segments={segments} /><div className="mt-4"><FiiOpportunitiesTable items={opportunities.slice(0, 8)} onSelect={(asset) => { setSelectedAsset(asset); setSearch(asset.ticker); }} /></div></PremiumCard></div></div></Section>;
+  return <Section title="Método AlfaTec FIIs" subtitle="Análise própria para fundos imobiliários, sem usar Graham, PEG ou P/L como método principal." eyebrow="Fundos imobiliários"><div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]"><div className="space-y-6"><PremiumCard title="Pesquisar FII" description="Selecione um fundo imobiliário real para analisar." icon={Search}><SearchBox label="Ticker ou nome do FII" value={search} onChange={setSearch} assets={fiiAssets} onSelect={(asset) => { setSelectedAsset(asset); setSearch(asset.ticker); }} /><div className="mt-4 grid gap-3 sm:grid-cols-2"><InfoTile label="Ativo" value={`${selectedAsset.ticker} - ${selectedAsset.name}`} /><InfoTile label="Tipo" value={analysis.kindLabel} /><InfoTile label="Última atualização" value={new Date(analysis.updatedAt).toLocaleString("pt-BR")} /><InfoTile label="Fonte do preço" value={analysis.price.source} /></div></PremiumCard><PremiumCard title="Entenda o método" description="Critérios, limitações e leitura correta da nota." icon={ShieldCheck}><div className="space-y-3 text-sm text-slate-600 dark:text-slate-300"><p>O Método AlfaTec FIIs combina indicadores financeiros, operacionais, patrimoniais e de risco. A ponderação muda conforme o tipo do fundo: tijolo, papel, híbrido, fundo de fundos, renda urbana, desenvolvimento, infraestrutura ou outro tipo compatível.</p><p>O método considera P/VP ajustado, Dividend Yield recorrente, prêmio de risco, liquidez, diversificação, risco do segmento, qualidade de dados e comparação com fundos semelhantes. P/VP abaixo de 1 e Dividend Yield alto nunca são usados isoladamente como oportunidade.</p><p className="rounded-2xl bg-amber-500/10 p-3 font-semibold text-amber-700 dark:text-amber-300">O Método AlfaTec FIIs é um modelo analítico próprio. A nota gerada não representa garantia de rendimento, valorização ou recomendação personalizada de investimento.</p></div></PremiumCard>{currentUser.role === "ADMIN" && <PremiumCard title="Configurações do Método AlfaTec FIIs" description="Pesos, taxa de referência e ativação do método." icon={Settings}><div className="grid gap-3"><Toggle label="Método ativo" checked={settings.enabled} onChange={(value) => saveSettings({ enabled: value })} /><Input label="Taxa de referência (%)" type="number" step="0.1" value={settings.referenceRate} onChange={(e) => saveSettings({ referenceRate: Number(e.target.value), referenceRateSource: "Parâmetro configurado pelo administrador" })} /><Input label="Fonte da taxa" value={settings.referenceRateSource} onChange={(e) => saveSettings({ referenceRateSource: e.target.value })} /><Select label="Confiança mínima" value={settings.minimumConfidence} onChange={(e) => saveSettings({ minimumConfidence: e.target.value as AlfatecFiiSettings["minimumConfidence"] })}><option value="Alta">Alta</option><option value="Media">Média</option><option value="Baixa">Baixa</option><option value="Insuficiente">Insuficiente</option></Select><div className="rounded-3xl bg-slate-50 p-4 dark:bg-white/5"><p className="mb-2 text-sm font-black">Pesos para {analysis.kindLabel}</p>{(Object.keys(kindWeights) as Array<keyof typeof kindWeights>).map((key) => <WeightSlider key={key} label={`${key} (${kindWeights[key]}%)`} value={kindWeights[key]} onChange={(value) => updateKindWeight(key, value)} />)}</div></div></PremiumCard>}</div><div className="space-y-6"><IncomeEventsCard asset={selectedAsset} /><AlfatecFiiScoreCard analysis={analysis} /><FiiScoreBreakdown analysis={analysis} /><FiiSegmentComparison comparison={comparison} ticker={analysis.ticker} score={analysis.score} /><FiiDataSourceInfo analysis={analysis} /><PremiumCard title="Comparação com FIIs filtrados" description="Lista rápida com fundos compatíveis e filtros do método." icon={TrendingUp}><FiiOpportunityFilters value={filters} onChange={(patch) => setFilters((current) => ({ ...current, ...patch }))} segments={segments} /><div className="mt-4"><FiiOpportunitiesTable items={opportunities.slice(0, 8)} onSelect={(asset) => { setSelectedAsset(asset); setSearch(asset.ticker); }} /></div></PremiumCard></div></div></Section>;
 }
 
 function FiiOpportunitiesTable({ items, onSelect }: { items: Array<{ asset: Asset; analysis: AlfatecFiiAnalysis }>; onSelect: (asset: Asset) => void }) {
@@ -2299,10 +2297,14 @@ function SettingsSection({
           </div>
         </PremiumCard>
         {currentUser.role === "ADMIN" && (
-          <PremiumCard title="Saúde do sistema - E-mail" description="Configuração SMTP, conexão, histórico e envio de teste." icon={MailCheck}>
-            <EmailHealthPanel />
-          </PremiumCard>
-        )}      </div>
+          <>
+            <PremiumCard title="Saúde do sistema - E-mail" description="Configuração SMTP, conexão, histórico e envio de teste." icon={MailCheck}>
+              <EmailHealthPanel />
+            </PremiumCard>
+            <MarketDataHealthPanel />
+          </>
+        )}
+      </div>
     </Section>
   );
 }

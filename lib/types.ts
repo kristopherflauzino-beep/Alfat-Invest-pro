@@ -2,6 +2,37 @@ export type AssetType = "ACAO" | "FII" | "ETF" | "BDR" | "CRIPTO";
 export type RiskLevel = "Baixo" | "Médio" | "Alto";
 export type CurrencyCode = "BRL" | "USD";
 
+export type IncomeEventType = "dividend" | "jcp" | "fii_income" | "amortization" | "capital_return";
+export type IncomeEventStatus = "announced" | "paid" | "estimated" | "cancelled";
+
+export type IncomeEvent = {
+  id: string;
+  ticker: string;
+  type: IncomeEventType;
+  amountPerUnit: number;
+  currency: CurrencyCode;
+  exDate?: string;
+  recordDate?: string;
+  paymentDate?: string;
+  status: IncomeEventStatus;
+  source: string;
+  sourceUrl?: string;
+  updatedAt: string;
+};
+
+export type AssetIncomeSummary = {
+  latestAmountPerUnit?: number;
+  latestPaymentDate?: string;
+  nextAmountPerUnit?: number;
+  nextPaymentDate?: string;
+  frequency: "Mensal" | "Bimestral" | "Trimestral" | "Semestral" | "Anual" | "Irregular" | "Sem histórico";
+  total12Months: number;
+  averageMonthly12Months: number;
+  events12Months: number;
+  source: string;
+  updatedAt: string;
+};
+
 export type PricePoint = {
   label: string;
   price: number;
@@ -103,6 +134,10 @@ export type Asset = {
   open?: number;
   dayHigh?: number;
   dayLow?: number;
+  incomeEvents?: IncomeEvent[];
+  incomeSummary?: AssetIncomeSummary;
+  priceConfidence?: "high" | "medium" | "low" | "insufficient";
+  validationMessages?: string[];
 };
 
 export type PortfolioPosition = {

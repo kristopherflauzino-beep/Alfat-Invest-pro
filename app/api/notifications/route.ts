@@ -8,6 +8,7 @@ import { ensurePlanLifecycleNotifications, dueEmailJobIds } from "@/lib/notifica
 import { deliverPlanEmailJob } from "@/lib/email/email-jobs";
 import { getFreePlanLimits, isFreePlan } from "@/lib/plans/access";
 import { deliverNotificationEmails } from "@/lib/notifications/email-delivery";
+import { ensureMarketFixedIncomeRelease } from "@/lib/notifications/releases";
 
 export const runtime = "nodejs";
 const actionSchema = z.object({
@@ -23,11 +24,12 @@ export async function GET(request: Request) {
   try {
     const account = await requireAccount(request);
     let state = await readCoreState();
+    const release = ensureMarketFixedIncomeRelease(state);
     const lifecycle = ensurePlanLifecycleNotifications(state, account);
-    if (lifecycle.changed) await writeCoreState(state);
+    if (release.changed || lifecycle.changed) await writeCoreState(state);
     const dueJobs = Array.from(new Set([...lifecycle.emailJobIds, ...dueEmailJobIds(state, account.id)]));
     for (const jobId of dueJobs) await deliverPlanEmailJob(jobId).catch(() => undefined);
-    if (lifecycle.changed || dueJobs.length > 0) state = await readCoreState();
+    if (release.changed || lifecycle.changed || dueJobs.length > 0) state = await readCoreState();
     const plan = state.plans.find((item) => item.id === account.planId);
     const free = account.role !== "ADMIN" && isFreePlan(account.planId, plan?.name);
     const dailyLimit = free ? getFreePlanLimits(plan as Parameters<typeof getFreePlanLimits>[0]).notifications : null;

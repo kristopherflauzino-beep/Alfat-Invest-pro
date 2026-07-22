@@ -24,6 +24,7 @@ export const freePlanPermissions = [
   "mercado",
   "oportunidades",
   "carteira",
+  "renda_fixa",
   "notificacoes",
   "relatorios",
   "graham_valuation",
